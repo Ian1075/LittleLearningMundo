@@ -1,92 +1,55 @@
 using UnityEngine;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using OllamaIntegration.Models;
 
 /// <summary>
-/// NPC 邏輯大腦：處理對話記憶、模型預熱。
-/// 視覺效果改為「切換材質」模式。
+/// NPC 核心大腦：負責協調所有子模組 (記憶、感應、視覺) 與 UI。
 /// </summary>
 public class NPCController : MonoBehaviour
 {
     public enum NPCState { Idle, Greeting, WaitingForInput, Thinking }
 
-    [Header("狀態管理")]
+    [Header("狀態與身分")]
     public NPCState currentState = NPCState.Idle;
     public string npcName = "資工學長";
 
-    [Header("AI 人設")]
-    [TextArea(3, 5)] 
-    public string npcPersonality = "你是一位成大資工系的學員，語氣親切幽默。請用繁體中文回答。";
-
-    [Header("對話記憶 (單次互動)")]
-    private List<OllamaChatMessage> _chatHistory = new List<OllamaChatMessage>();
-
-    [Header("系統引用")]
-    public OllamaService ollamaService;
-    public ChatUIManager chatUI; 
-
-    [Header("視覺效果 (材質切換)")]
-    [Tooltip("請將 NPC 的 Mesh Renderer 拖入此處")]
-    public Renderer npcRenderer;
-    [Tooltip("平時顯示的原始材質")]
-    public Material originalMaterial;
-    [Tooltip("選中時顯示的邊框高亮材質")]
-    public Material highlightMaterial;
+    [Header("模組引用")]
+    public NPCMemoryManager memoryManager;     // 記憶模組
+    public NPCLocationSensor locationSensor;   // 地點感應模組
+    public NPCVisualManager visualManager;     // 視覺模組
+    public OllamaService ollamaService;        // AI 服務
+    public ChatUIManager chatUI;               // UI 控制器
 
     private void Start()
     {
-        // 1. 自動檢查 Renderer
-        if (npcRenderer == null)
-        {
-            npcRenderer = GetComponentInChildren<Renderer>();
-        }
-
-        // 2. 自動備份原始材質 (如果在 Inspector 沒拉的話)
-        if (npcRenderer != null && originalMaterial == null)
-        {
-            originalMaterial = npcRenderer.sharedMaterial;
-        }
-
-        // 3. 啟動時預熱 Ollama 模型
-        if (ollamaService != null)
-        {
-            ollamaService.PrewarmModel(npcPersonality);
-        }
+        // 1. 預熱模型
+        if (ollamaService != null && memoryManager != null) 
+            ollamaService.PrewarmModel(memoryManager.npcPersonality);
         
-        // 4. 初始狀態確保使用原始材質
-        SetHighlight(false);
+        // 2. 初始化視覺
+        if (visualManager != null) 
+            visualManager.SetHighlight(false);
     }
 
     /// <summary>
-    /// [公開方法] 透過切換材質來開啟或關閉 NPC 的邊框效果。
-    /// </summary>
-    /// <param name="highlight">是否切換至高亮材質</param>
-    public void SetHighlight(bool highlight)
-    {
-        if (npcRenderer == null || originalMaterial == null || highlightMaterial == null) 
-        {
-            // 如果材質沒拉，給予警告但不要報錯中斷
-            return;
-        }
-
-        // 執行材質切換
-        npcRenderer.material = highlight ? highlightMaterial : originalMaterial;
-    }
-
-    /// <summary>
-    /// 啟動互動 (通常由 PlayerInteraction 呼叫)
+    /// 開始對話 (由 PlayerInteraction 呼叫)
     /// </summary>
     public void StartGreeting()
     {
         currentState = NPCState.Greeting;
-        string greeting = "嘿！找我有事嗎？";
-        if (_chatHistory.Count > 0) greeting = "還有什麼想問的嗎？";
-        chatUI.ShowNPCResponse(npcName, greeting);
+
+        // 獲取地點資訊
+        BuildingZone zone = locationSensor != null ? locationSensor.GetCurrentZone() : null;
+        
+        // 獲取初始問候語
+        string greeting = memoryManager != null ? memoryManager.GetInitialGreeting(zone) : "嘿！你好。";
+        
+        // 顯示回覆並註冊結束回呼
+        chatUI.ShowNPCResponse(npcName, greeting, EndInteraction);
     }
 
     /// <summary>
-    /// 切換到玩家輸入模式
+    /// 切換到輸入模式
     /// </summary>
     public void SwitchToInputMode()
     {
@@ -94,36 +57,35 @@ public class NPCController : MonoBehaviour
         chatUI.OpenPlayerInput(OnPlayerSubmit);
     }
 
-    /// <summary>
-    /// 處理 AI 對話邏輯
-    /// </summary>
     private async void OnPlayerSubmit(string playerInput)
     {
         currentState = NPCState.Thinking;
-        
-        // 初始化記憶
-        if (_chatHistory.Count == 0)
-            _chatHistory.Add(new OllamaChatMessage { role = "system", content = npcPersonality });
 
-        _chatHistory.Add(new OllamaChatMessage { role = "user", content = playerInput });
+        BuildingZone zone = locationSensor != null ? locationSensor.GetCurrentZone() : null;
         
-        // 發送請求給 Ollama
-        string aiResponse = await ollamaService.RequestChatAsync(_chatHistory);
-        
-        _chatHistory.Add(new OllamaChatMessage { role = "assistant", content = aiResponse });
+        // 準備 AI 訊息
+        var history = memoryManager.PrepareMessages(playerInput, zone);
 
-        chatUI.ShowNPCResponse(npcName, aiResponse);
-        currentState = NPCState.Greeting; 
+        // 向 AI 請求
+        string aiResponse = await ollamaService.RequestChatAsync(history);
+        
+        // 儲存回覆
+        memoryManager.SaveAssistantResponse(aiResponse);
+
+        // 顯示結果
+        chatUI.ShowNPCResponse(npcName, aiResponse, EndInteraction);
+        currentState = NPCState.Greeting;
     }
 
     /// <summary>
-    /// 結束對話，解鎖玩家
+    /// 結束對話
     /// </summary>
     public void EndInteraction()
     {
         chatUI.CloseChat();
         currentState = NPCState.Idle;
 
+        // 解鎖玩家
         PlayerController player = FindObjectOfType<PlayerController>();
         if (player != null) player.SetState(PlayerController.PlayerState.Idle);
     }

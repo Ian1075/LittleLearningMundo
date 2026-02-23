@@ -47,9 +47,9 @@ public class PlayerInteraction : MonoBehaviour
 
         if (nearest != _currentNearestNpc)
         {
-            if (_currentNearestNpc != null) _currentNearestNpc.SetHighlight(false);
+            if (_currentNearestNpc != null) _currentNearestNpc.visualManager.SetHighlight(false);
             _currentNearestNpc = nearest;
-            if (_currentNearestNpc != null) _currentNearestNpc.SetHighlight(true);
+            if (_currentNearestNpc != null) _currentNearestNpc.visualManager.SetHighlight(true);
         }
     }
 
