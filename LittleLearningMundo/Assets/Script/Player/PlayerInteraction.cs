@@ -1,15 +1,12 @@
 using UnityEngine;
 using System.Linq;
 
-/// <summary>
-/// 處理 3D 空間偵測與互動觸發，狀態邏輯交由 PlayerController 管理
-/// </summary>
 public class PlayerInteraction : MonoBehaviour
 {
     [Header("互動設定")]
     public float interactionRange = 5f;
     public KeyCode interactKey = KeyCode.E;
-    public LayerMask npcLayer;
+    public LayerMask npcLayer; 
 
     [Header("引用組件")]
     public PlayerController playerController;
@@ -17,17 +14,15 @@ public class PlayerInteraction : MonoBehaviour
 
     private NPCController _currentNearestNpc;
 
-    private void Start()
-    {
-        if (playerController == null) playerController = GetComponent<PlayerController>();
-    }
-
     private void Update()
     {
-        // 檢查 UI 是否正在輸入，或者玩家是否正在對話狀態
-        if (chatUI != null && chatUI.IsInputFieldActive()) return;
+        if (chatUI != null && chatUI.IsInputFieldActive()) 
+        {
+            ClearCurrentHighlight();
+            return;
+        }
 
-        FindAndHighlightNearestNPC();
+        UpdateNearestNPC();
 
         if (Input.GetKeyDown(interactKey))
         {
@@ -35,21 +30,30 @@ public class PlayerInteraction : MonoBehaviour
         }
     }
 
-    private void FindAndHighlightNearestNPC()
+    private void UpdateNearestNPC()
     {
         Collider[] hitColliders = Physics.OverlapSphere(transform.position, interactionRange, npcLayer);
         
         NPCController nearest = hitColliders
-            .Select(c => c.GetComponent<NPCController>())
+            .Select(c => c.GetComponentInParent<NPCController>())
             .Where(n => n != null)
             .OrderBy(n => Vector3.Distance(transform.position, n.transform.position))
             .FirstOrDefault();
 
         if (nearest != _currentNearestNpc)
         {
-            if (_currentNearestNpc != null) _currentNearestNpc.visualManager.SetHighlight(false);
+            ClearCurrentHighlight();
             _currentNearestNpc = nearest;
-            if (_currentNearestNpc != null) _currentNearestNpc.visualManager.SetHighlight(true);
+            if (_currentNearestNpc != null) _currentNearestNpc.SetHighlight(true);
+        }
+    }
+
+    private void ClearCurrentHighlight()
+    {
+        if (_currentNearestNpc != null) 
+        {
+            _currentNearestNpc.SetHighlight(false);
+            _currentNearestNpc = null;
         }
     }
 
@@ -57,25 +61,22 @@ public class PlayerInteraction : MonoBehaviour
     {
         if (_currentNearestNpc == null) return;
 
-        switch (_currentNearestNpc.currentState)
+        if (_currentNearestNpc.currentState == NPCController.NPCState.Idle)
         {
-            case NPCController.NPCState.Idle:
-                // 1. 通知 Controller 切換到對話狀態（鎖定移動）
+            // 模式切換判定
+            if (_currentNearestNpc.isStoryNPC && 
+                GameModeManager.Instance != null && 
+                GameModeManager.Instance.currentMode == GameModeManager.GameMode.FreeMode)
+            {
+                Debug.Log($"[Interaction] 啟動主線模式：{_currentNearestNpc.npcName}");
+                GameModeManager.Instance.SetGameMode(GameModeManager.GameMode.MainStory);
+                return;
+            }
+
+            if (playerController != null) 
                 playerController.SetState(PlayerController.PlayerState.Talking);
-                // 2. 讓 NPC 開始打招呼
-                _currentNearestNpc.StartGreeting();
-                break;
-
-            case NPCController.NPCState.Greeting:
-                // 如果已經在對話中，再按一次 E 切換到輸入模式
-                _currentNearestNpc.SwitchToInputMode();
-                break;
+                
+            _currentNearestNpc.StartTalking();
         }
-    }
-
-    private void OnDrawGizmosSelected()
-    {
-        Gizmos.color = Color.cyan;
-        Gizmos.DrawWireSphere(transform.position, interactionRange);
     }
 }
