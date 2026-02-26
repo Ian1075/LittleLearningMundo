@@ -5,15 +5,13 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
-using System.Text;
 
 /// <summary>
-/// 負責對話介面顯示、分段與輸入。
-/// 已優化：解決回覆開頭出現空行的問題，並優化分段與打字機連動。
+/// 處理對話 UI。確保在不同對話狀態下，UI 元件的 Active 狀態切換正確。
 /// </summary>
 public class ChatUIManager : MonoBehaviour
 {
-    [Header("UI 元件引用")]
+    [Header("UI 元件")]
     public GameObject background;
     public TextMeshProUGUI nameTMP;
     public TextMeshProUGUI responseTMP;
@@ -22,16 +20,15 @@ public class ChatUIManager : MonoBehaviour
     public Button enterBtn;
     public GameObject nextIcon;
 
-    [Header("打字機特效設定")]
-    public int scrambleCount = 2;
-    public float scrambleSpeed = 0.01f;
+    [Header("打字機特效")]
+    public int scrambleCount = 3;
+    public float scrambleSpeed = 0.015f;
     public float charDelay = 0.02f;
-
-    [Header("分段設定")]
     public int maxCharsPerSegment = 80;
 
     private string _glitchChars = "!@#$%^&*()_+-=[]{}|;':,.<>/?0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     
+    // 狀態管理回呼
     private Action _onEscPressed;
     private Action _onFinishedAll; 
     private Action<string> _onInputSubmitted; 
@@ -39,10 +36,9 @@ public class ChatUIManager : MonoBehaviour
     private bool _isTyping = false;
     private bool _isMultiSegmentFlow = false;
     private bool _isStreamingActive = false;
-
     private string _fullStreamBuffer = ""; 
-    private int _streamCharPtr = 0;       
-    private string _currentSegmentShowing = ""; 
+    private string _currentSegmentShowing = "";
+    private int _streamCharPtr = 0;
 
     private void Awake()
     {
@@ -54,8 +50,12 @@ public class ChatUIManager : MonoBehaviour
 
     private void Update()
     {
+        // 隨時檢查 Canvas 攝影機，防止因為視角切換導致 UI 渲染在錯誤的相機平面
+        UpdateCanvasCamera();
+
         if (background == null || !background.activeSelf) return;
 
+        // 1. Esc 關閉
         if (Input.GetKeyDown(KeyCode.Escape))
         {
             _onEscPressed?.Invoke();
@@ -63,6 +63,7 @@ public class ChatUIManager : MonoBehaviour
             return;
         }
 
+        // 2. 處理 E 鍵或點擊 (NPC 說話模式下)
         if (_isMultiSegmentFlow && !IsInputFieldActive())
         {
             if (Input.GetKeyDown(KeyCode.E) || Input.GetMouseButtonDown(0))
@@ -77,11 +78,9 @@ public class ChatUIManager : MonoBehaviour
                     nextIcon.SetActive(false);
                     responseTMP.text = "";
                     _currentSegmentShowing = "";
-
+                    
                     if (_isStreamingActive || _streamCharPtr < _fullStreamBuffer.Length)
-                    {
                         StartCoroutine(StreamingTypewriterCore());
-                    }
                     else
                     {
                         _isMultiSegmentFlow = false;
@@ -92,6 +91,7 @@ public class ChatUIManager : MonoBehaviour
         }
         else if (IsInputFieldActive())
         {
+            // 3. 輸入模式：按 Enter 送出
             if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
             {
                 HandleSubmit();
@@ -99,39 +99,59 @@ public class ChatUIManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 確保 UI 始終對齊目前的主相機
+    /// </summary>
+    private void UpdateCanvasCamera()
+    {
+        Canvas canvas = GetComponentInParent<Canvas>();
+        if (canvas != null && canvas.renderMode == RenderMode.ScreenSpaceCamera)
+        {
+            if (canvas.worldCamera != Camera.main)
+            {
+                canvas.worldCamera = Camera.main;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 關閉所有 UI 元件
+    /// </summary>
     public void CloseChat()
     {
         StopAllCoroutines();
-        _isTyping = false;
-        _isMultiSegmentFlow = false;
-        _isStreamingActive = false;
-        _fullStreamBuffer = "";
-        _streamCharPtr = 0;
+        _isTyping = _isMultiSegmentFlow = _isStreamingActive = false;
         
         if (background) background.SetActive(false);
         if (nameTMP) nameTMP.gameObject.SetActive(false);
         if (responseTMP) responseTMP.gameObject.SetActive(false);
         if (inputArea) inputArea.SetActive(false);
-        if (enterBtn) enterBtn.gameObject.SetActive(false);
         if (nextIcon) nextIcon.SetActive(false);
+        if (enterBtn) enterBtn.gameObject.SetActive(false);
     }
 
-    // ==================== 串流回覆 (Streaming) ====================
-
+    /// <summary>
+    /// 準備開始串流顯示 NPC 回話
+    /// </summary>
     public void PrepareStreamingResponse(string npcName)
     {
-        _fullStreamBuffer = "";
-        _streamCharPtr = 0;
-        _currentSegmentShowing = "";
-        _isStreamingActive = true;
-        _isMultiSegmentFlow = true; 
+        _fullStreamBuffer = ""; _streamCharPtr = 0; _currentSegmentShowing = "";
+        _isStreamingActive = _isMultiSegmentFlow = true;
 
-        background.SetActive(true);
-        if (nameTMP) { nameTMP.gameObject.SetActive(true); nameTMP.text = npcName; }
-        responseTMP.gameObject.SetActive(true);
-        responseTMP.text = "";
+        // 【狀態設定：說話模式】
+        if (background) background.SetActive(true);
+        if (nameTMP) { 
+            nameTMP.gameObject.SetActive(true); 
+            nameTMP.text = npcName; 
+        }
+        if (responseTMP) { 
+            responseTMP.gameObject.SetActive(true); 
+            responseTMP.text = "..."; 
+        }
         
-        inputArea.SetActive(false);
+        // 確保輸入相關隱藏
+        if (inputArea) inputArea.SetActive(false);
+        if (enterBtn) enterBtn.gameObject.SetActive(false);
         if (nextIcon) nextIcon.SetActive(false);
 
         StopAllCoroutines();
@@ -140,68 +160,47 @@ public class ChatUIManager : MonoBehaviour
 
     public void UpdateStreamingText(string fullText)
     {
-        // 核心修正：移除全文開頭的所有換行符號與空白，確保 NPC 不會從第二行才開始說話
-        _fullStreamBuffer = fullText.TrimStart('\r', '\n', ' ');
-    }
-
-    public void FinishStreamingResponse(Action onEsc, Action onAllFinished)
-    {
-        _onEscPressed = onEsc;
-        _onFinishedAll = onAllFinished;
-        _isStreamingActive = false; 
+        _fullStreamBuffer = Regex.Replace(fullText, @"[\r\n]+", "").TrimStart();
     }
 
     private IEnumerator StreamingTypewriterCore()
     {
         _isTyping = true;
         int currentSegmentCount = 0;
-
         while (_isStreamingActive || _streamCharPtr < _fullStreamBuffer.Length)
         {
             if (_streamCharPtr < _fullStreamBuffer.Length)
             {
                 char c = _fullStreamBuffer[_streamCharPtr];
-                
-                // 檢查是否需要分段
-                bool isPunctuation = "。！？\n；".Contains(c.ToString());
-                bool isOverLength = currentSegmentCount >= maxCharsPerSegment;
-
-                if ((isPunctuation || isOverLength) && _streamCharPtr < _fullStreamBuffer.Length - 1)
+                bool isSegmentBreak = "。！？；".Contains(c.ToString());
+                if ((isSegmentBreak || currentSegmentCount >= maxCharsPerSegment) && _streamCharPtr < _fullStreamBuffer.Length - 1)
                 {
                     yield return StartCoroutine(TypeSingleCharWithGlitch(c));
-                    _streamCharPtr++;
-                    break; 
+                    _streamCharPtr++; break; 
                 }
-
                 yield return StartCoroutine(TypeSingleCharWithGlitch(c));
-                _streamCharPtr++;
-                currentSegmentCount++;
+                _streamCharPtr++; currentSegmentCount++;
             }
-            else
-            {
-                yield return null;
-            }
+            else yield return null;
         }
-
         _isTyping = false;
+        
+        // 打字結束，顯示繼續圖示
         if (nextIcon) nextIcon.SetActive(true);
     }
 
     private IEnumerator TypeSingleCharWithGlitch(char c)
     {
-        if (char.IsWhiteSpace(c))
-        {
-            _currentSegmentShowing += c;
-            responseTMP.text = _currentSegmentShowing;
-            yield break;
+        if (char.IsWhiteSpace(c)) { 
+            _currentSegmentShowing += c; 
+            responseTMP.text = _currentSegmentShowing; 
+            yield break; 
         }
-
         for (int j = 0; j < scrambleCount; j++)
         {
             responseTMP.text = _currentSegmentShowing + _glitchChars[UnityEngine.Random.Range(0, _glitchChars.Length)];
             yield return new WaitForSeconds(scrambleSpeed);
         }
-
         _currentSegmentShowing += c;
         responseTMP.text = _currentSegmentShowing;
         yield return new WaitForSeconds(charDelay);
@@ -213,37 +212,58 @@ public class ChatUIManager : MonoBehaviour
         while (_streamCharPtr < _fullStreamBuffer.Length)
         {
             char c = _fullStreamBuffer[_streamCharPtr];
-            _currentSegmentShowing += c;
-            _streamCharPtr++;
-            if ("。！？\n；".Contains(c.ToString()) || _currentSegmentShowing.Length % maxCharsPerSegment == 0)
-                break;
+            _currentSegmentShowing += c; _streamCharPtr++;
+            if ("。！？；".Contains(c.ToString()) || _currentSegmentShowing.Length >= maxCharsPerSegment) break;
         }
         responseTMP.text = _currentSegmentShowing;
         if (nextIcon) nextIcon.SetActive(true);
     }
 
-    // ==================== 基礎輸入邏輯 ====================
+    public void FinishStreamingResponse(Action onEsc, Action onAllFinished)
+    {
+        _onEscPressed = onEsc; _onFinishedAll = onAllFinished;
+        _isStreamingActive = false; 
+    }
 
+    /// <summary>
+    /// 開啟玩家輸入框
+    /// </summary>
     public void OpenPlayerInput(Action<string> onCallback)
     {
         _isMultiSegmentFlow = false;
         _onInputSubmitted = onCallback;
-        responseTMP.gameObject.SetActive(false);
+
+        // 【狀態設定：輸入模式】
+        if (background) background.SetActive(true);
+        if (responseTMP) responseTMP.gameObject.SetActive(false);
         if (nextIcon) nextIcon.SetActive(false);
-        inputArea.SetActive(true);
+        
+        if (inputArea) inputArea.SetActive(true);
         if (enterBtn) enterBtn.gameObject.SetActive(true);
-        inputField.text = "";
-        inputField.ActivateInputField();
+        
+        if (inputField != null)
+        {
+            inputField.text = ""; 
+            inputField.ActivateInputField();
+        }
     }
 
     public void HandleSubmit()
     {
         if (!IsInputFieldActive() || string.IsNullOrEmpty(inputField.text)) return;
+        
         string text = inputField.text;
-        inputArea.SetActive(false);
+
+        // 送出後回到等待顯示模式
+        if (inputArea) inputArea.SetActive(false);
         if (enterBtn) enterBtn.gameObject.SetActive(false);
-        responseTMP.gameObject.SetActive(true);
-        responseTMP.text = "傳輸訊息中...";
+        
+        if (responseTMP)
+        {
+            responseTMP.gameObject.SetActive(true);
+            responseTMP.text = "...";
+        }
+        
         _onInputSubmitted?.Invoke(text);
     }
 

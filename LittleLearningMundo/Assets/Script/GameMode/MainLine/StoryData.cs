@@ -1,29 +1,35 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-/// <summary>
-/// 用於定義主線導覽流程的資料檔案。
-/// </summary>
 [CreateAssetMenu(fileName = "NewStoryData", menuName = "NCKU/Story Data")]
 public class StoryData : ScriptableObject
 {
     [System.Serializable]
     public class StoryStep
     {
-        [Tooltip("目的地的 Location ID (需與 WaypointNode 的一致)")]
+        [Header("站點設定")]
         public string locationID;
         
-        [Tooltip("抵達後的自定義對話內容 (若不填寫則由 AI 自由發揮)")]
+        [Tooltip("敘述內容。")]
         [TextArea(3, 10)]
-        public string customDialogue;
+        public string description;
 
-        [Tooltip("是否強制使用 AI 介紹該區域")]
+        [Tooltip("是否使用 AI 介紹。")]
         public bool useAISummary = true;
+
+        [Header("視覺演出 (非必填)")]
+        [Tooltip("要投射在建築物上的照片")]
+        public Sprite projectionImage;
+        
+        [Tooltip("是否在介紹時切換到該建築的導覽視角")]
+        public bool switchCameraView = true;
     }
 
-    [Header("劇情章節名稱")]
+    [Header("劇情設定")]
     public string storyTitle = "新生入學導覽";
 
-    [Header("導覽步驟清單")]
+    [TextArea(2, 5)]
+    public string endStoryDialogue = "導覽行程結束囉！";
+
     public List<StoryStep> steps = new List<StoryStep>();
 }

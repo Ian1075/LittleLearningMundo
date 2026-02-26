@@ -6,25 +6,25 @@ using OllamaIntegration.Models;
 using Newtonsoft.Json.Linq;
 
 /// <summary>
-/// NPC 核心控制器：負責對話、導航與主線回報。
+/// NPC 核心控制器：確保抵達後的介紹會正確顯示對話，並等待玩家確認。
 /// </summary>
 public class NPCController : MonoBehaviour
 {
     public enum NPCState { Idle, Talking, Navigating, Thinking }
 
-    [Header("身分與資源")]
+    [Header("身分設定")]
     public NPCIdentity identity;
-    public string npcName = "NPC";
+    public string npcName = "學長";
 
     [Header("功能設定")]
     public bool isGuide = true;
-    public bool isStoryNPC = false; // 是否為主線導覽員
+    public bool isStoryNPC = false; 
     public bool autoStartGreeting = false;
 
     [Header("當前狀態")]
     public NPCState currentState = NPCState.Idle;
 
-    [Header("引用組件")]
+    [Header("引用")]
     public NPCNavigator navigator;
     public NPCLocationSensor sensor;
     public NPCVisualManager visualManager;
@@ -41,13 +41,9 @@ public class NPCController : MonoBehaviour
         if (autoStartGreeting) Invoke(nameof(StartTalking), 0.5f);
     }
 
-    /// <summary>
-    /// 對話啟動入口
-    /// </summary>
     public void StartTalking()
     {
-        if (identity == null) { Debug.LogError("未指派 NPCIdentity！"); return; }
-
+        if (identity == null) return;
         bool wasNavigating = (currentState == NPCState.Navigating);
         if (wasNavigating) navigator.StopMoving();
         
@@ -56,7 +52,7 @@ public class NPCController : MonoBehaviour
 
         BuildingZone currentZone = sensor != null ? sensor.GetCurrentZone() : null;
 
-        // 判定：導航結束且人在區域內 -> 觸發介紹
+        // 抵達站點觸發
         if (isGuide && wasNavigating && currentZone != null)
         {
             HandleArrivalIntroduction(currentZone);
@@ -69,17 +65,39 @@ public class NPCController : MonoBehaviour
 
     private void SwitchToInputMode() => chatUI.OpenPlayerInput(OnPlayerSubmit);
 
-    /// <summary>
-    /// 到達目的地後的自動介紹
-    /// </summary>
     private async void HandleArrivalIntroduction(BuildingZone zone)
     {
+        bool isMainStory = (isStoryNPC && GameModeManager.Instance != null && GameModeManager.Instance.currentMode == GameModeManager.GameMode.MainStory);
+        
+        // 1. 立即啟動視覺演出 (切換鏡頭)
+        if (isMainStory) StoryManager.Instance?.NotifyArrivalVisuals(zone);
+
+        // 2. 準備 UI
         currentState = NPCState.Thinking;
         _currentStreamText = "";
         _pendingToolCall = null;
         chatUI.PrepareStreamingResponse(identity.npcName);
 
-        string arrivalPrompt = string.Format(identity.arrivalEventPrompt, zone.displayName, zone.knowledgeBase);
+        StoryData.StoryStep storyStep = isMainStory ? StoryManager.Instance.GetCurrentStep() : null;
+
+        // 邏輯 A：照稿唸 (不使用 AI)
+        if (isMainStory && storyStep != null && !storyStep.useAISummary)
+        {
+            currentState = NPCState.Talking;
+            chatUI.ShowNPCResponse(identity.npcName, storyStep.description, EndInteraction, () => {
+                // 對話完畢，由玩家按 E 觸發下一站
+                if (isMainStory) StoryManager.Instance?.OnStepArrival();
+                else SwitchToInputMode();
+            });
+            return;
+        }
+
+        // 邏輯 B：AI 介紹
+        string combinedKnowledge = zone.knowledgeBase;
+        if (storyStep != null && !string.IsNullOrEmpty(storyStep.description))
+            combinedKnowledge += $"\n[主線描述參考：{storyStep.description}]";
+
+        string arrivalPrompt = string.Format(identity.arrivalEventPrompt, zone.displayName, combinedKnowledge);
         var history = memoryManager.PrepareMessages(arrivalPrompt, zone);
         var request = ollamaService.CreateRequest(history, false);
 
@@ -91,16 +109,11 @@ public class NPCController : MonoBehaviour
         memoryManager.SaveAssistantResponse(_currentStreamText);
         currentState = NPCState.Talking;
         
+        // 關鍵：FinishStreamingResponse 會處理打字機結束後的「按 E 繼續」
         chatUI.FinishStreamingResponse(EndInteraction, () => {
-            // 如果目前是在「主線模式」，抵達介紹完畢後要通知 StoryManager
-            if (isStoryNPC && GameModeManager.Instance != null && GameModeManager.Instance.currentMode == GameModeManager.GameMode.MainStory)
-            {
-                StoryManager.Instance?.OnStepArrival();
-            }
-            else
-            {
-                SwitchToInputMode();
-            }
+            // 當玩家在對話框按完最後一個 E
+            if (isMainStory) StoryManager.Instance?.OnStepArrival();
+            else SwitchToInputMode();
         });
     }
 
@@ -109,51 +122,39 @@ public class NPCController : MonoBehaviour
         currentState = NPCState.Thinking;
         _currentStreamText = "";
         _pendingToolCall = null;
-
         chatUI.PrepareStreamingResponse(identity.npcName);
 
         BuildingZone currentZone = sensor != null ? sensor.GetCurrentZone() : null;
         var history = memoryManager.PrepareMessages(playerInput, currentZone);
         var request = ollamaService.CreateRequest(history, isGuide);
 
-        await ollamaService.apiClient.SendChatStreamAsync(request, 
-            (chunk) => {
-                _currentStreamText += chunk;
-                chatUI.UpdateStreamingText(_currentStreamText);
-            }, 
-            (toolCall) => {
-                if (isGuide) _pendingToolCall = toolCall;
-            }
-        );
+        await ollamaService.apiClient.SendChatStreamAsync(request, (chunk) => {
+            _currentStreamText += chunk;
+            chatUI.UpdateStreamingText(_currentStreamText);
+        }, (tc) => { if (isGuide) _pendingToolCall = tc; });
 
         memoryManager.SaveAssistantResponse(_currentStreamText);
         currentState = NPCState.Talking;
 
-        if (isGuide && _pendingToolCall != null && _pendingToolCall.function.name == "navigate_to_location")
-        {
+        if (isGuide && _pendingToolCall != null) {
             string locId = ExtractId(_pendingToolCall.function.arguments);
-            if (!string.IsNullOrEmpty(locId))
-            {
-                HandleNavigation(locId);
-                return;
-            }
+            if (!string.IsNullOrEmpty(locId)) { HandleNavigation(locId); return; }
         }
-        
         chatUI.FinishStreamingResponse(EndInteraction, SwitchToInputMode);
     }
 
     private void HandleNavigation(string locId)
     {
-        string destinationName = (locId == "CSIE") ? "資工系館" : (locId == "OPHY" ? "物理系舊館" : locId);
-        string reply = string.Format(identity.arrivalReplyTemplate, destinationName);
+        string destName = (locId == "CSIE") ? "資工系館" : (locId == "OPHY" ? "物理系舊館" : locId);
+        string reply = string.Format(identity.arrivalReplyTemplate, destName);
         chatUI.ShowNPCResponse(identity.npcName, reply, EndInteraction, () => ExecuteNavigation(locId));
     }
 
-    private string ExtractId(JToken arguments)
+    private string ExtractId(JToken args)
     {
-        if (arguments == null) return null;
-        if (arguments is JObject obj && obj.TryGetValue("location_id", out JToken val)) return val.ToString();
-        return arguments.ToString().Trim('\"');
+        if (args == null) return null;
+        if (args is JObject obj && obj.TryGetValue("location_id", out JToken val)) return val.ToString();
+        return args.ToString().Trim('\"');
     }
 
     public void ExecuteNavigation(string destinationID)
@@ -175,7 +176,8 @@ public class NPCController : MonoBehaviour
     {
         chatUI.CloseChat();
         currentState = NPCState.Idle;
-        if (playerController != null) playerController.SetState(PlayerController.PlayerState.Idle);
+        if (playerController != null) 
+            playerController.SetState(PlayerController.PlayerState.Idle); 
     }
 
     public void SetHighlight(bool highlight) { if (visualManager != null) visualManager.SetHighlight(highlight); }

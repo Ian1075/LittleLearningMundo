@@ -1,28 +1,31 @@
 using UnityEngine;
 
-/// <summary>
-/// 掛載在建築物門口的 Trigger 物件上。
-/// 用於精確定義「導覽觸發點」，確保 NPC 在正確的位置介紹該建築。
-/// </summary>
-[RequireComponent(typeof(Collider))]
 public class BuildingZone : MonoBehaviour
 {
     [Header("地點基本資訊")]
-    public string locationID;      // 唯一識別碼 (如: CSIE_Entrance)
-    public string displayName;     // 顯示名稱 (如: 資工系館正門)
+    public string locationID;
+    public string displayName;
 
     [Header("AI 導覽知識庫")]
     [TextArea(5, 15)]
-    public string knowledgeBase;   // 專屬於這個視角的介紹資訊
+    public string knowledgeBase;
+
+    [Header("視覺演出錨點 (主線使用)")]
+    [Tooltip("鏡頭切換時的目標位置與角度")]
+    public Transform cinematicCameraNode;
+    
+    [Tooltip("照片投射的 Quad 物件位置")]
+    public Transform projectionPlane;
 
     private void Awake()
     {
-        // 確保 Collider 設為 Trigger，才不會擋住玩家走路
         Collider col = GetComponent<Collider>();
         if (col != null) col.isTrigger = true;
+
+        // 預設隱藏投影面
+        if (projectionPlane != null) projectionPlane.gameObject.SetActive(false);
     }
 
-    // 方便在 Scene 視窗辨識這些區域
     private void OnDrawGizmos()
     {
         Gizmos.color = new Color(0f, 1f, 0f, 0.3f);
@@ -31,6 +34,14 @@ public class BuildingZone : MonoBehaviour
         {
             Gizmos.matrix = transform.localToWorldMatrix;
             Gizmos.DrawCube(box.center, box.size);
+        }
+
+        // 畫出相機節點的朝向
+        if (cinematicCameraNode != null)
+        {
+            Gizmos.color = Color.magenta;
+            Gizmos.DrawSphere(cinematicCameraNode.position, 0.5f);
+            Gizmos.DrawLine(cinematicCameraNode.position, cinematicCameraNode.position + cinematicCameraNode.forward * 2f);
         }
     }
 }
