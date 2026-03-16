@@ -1,19 +1,17 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-/// <summary>
-/// 管理主線劇本。修正：在結束導覽時，確保攝影機恢復。
-/// </summary>
 public class StoryManager : MonoBehaviour
 {
     public static StoryManager Instance { get; private set; }
 
-    [Header("劇本設定")]
+    [Header("當前劇本")]
     public StoryData currentStory;
+
+    [Header("執行 NPC")]
     public NPCController storyNPC;
     
     private int _currentStepIndex = 0;
-    private BuildingZone _activeZone;
 
     private void Awake()
     {
@@ -38,7 +36,20 @@ public class StoryManager : MonoBehaviour
     {
         if (_currentStepIndex >= currentStory.steps.Count)
         {
-            TriggerStoryCompletion();
+            Debug.Log("<color=green>[主線結束]</color>");
+            if (storyNPC != null)
+            {
+                storyNPC.chatUI.ShowNPCResponse(
+                    storyNPC.identity.npcName, 
+                    currentStory.endStoryDialogue, 
+                    CleanupAndSwitchMode, 
+                    CleanupAndSwitchMode 
+                );
+            }
+            else
+            {
+                CleanupAndSwitchMode();
+            }
             return;
         }
 
@@ -48,10 +59,11 @@ public class StoryManager : MonoBehaviour
 
     public void OnStepArrival()
     {
-        // 這一站結束了，恢復攝影機
-        if (StoryVisualManager.Instance != null)
+        // 這一站介紹完畢，通知視覺管理器關閉所有該站的照片並恢復鏡頭
+        var step = GetCurrentStep();
+        if (StoryVisualManager.Instance != null && step != null)
         {
-            StoryVisualManager.Instance.EndCinematic(_activeZone);
+            StoryVisualManager.Instance.EndCinematic(step);
         }
 
         _currentStepIndex++;
@@ -59,47 +71,16 @@ public class StoryManager : MonoBehaviour
         Invoke(nameof(ExecuteStep), 2.0f);
     }
 
-    private void TriggerStoryCompletion()
-    {
-        if (storyNPC != null)
-        {
-            storyNPC.chatUI.ShowNPCResponse(
-                storyNPC.identity.npcName, 
-                currentStory.endStoryDialogue, 
-                CleanupAndSwitchMode, 
-                CleanupAndSwitchMode
-            );
-        }
-    }
-
-    /// <summary>
-    /// 徹底清理導覽狀態並切換回自由模式
-    /// </summary>
     private void CleanupAndSwitchMode()
     {
-        Debug.Log("[StoryManager] 導覽正式結束，執行清理。");
-        
-        // 1. 確保攝影機一定恢復
-        if (StoryVisualManager.Instance != null)
+        var step = GetCurrentStep();
+        if (StoryVisualManager.Instance != null && step != null)
         {
-            StoryVisualManager.Instance.EndCinematic(_activeZone);
+            StoryVisualManager.Instance.EndCinematic(step);
         }
 
-        // 2. NPC 狀態清理
         if (storyNPC != null) storyNPC.EndInteraction();
-
-        // 3. 切換模式
         if (GameModeManager.Instance != null)
             GameModeManager.Instance.SetGameMode(GameModeManager.GameMode.FreeMode);
-    }
-
-    public void NotifyArrivalVisuals(BuildingZone zone)
-    {
-        _activeZone = zone;
-        var step = GetCurrentStep();
-        if (step != null && StoryVisualManager.Instance != null)
-        {
-            StoryVisualManager.Instance.StartCinematic(zone, step.projections);
-        }
     }
 }

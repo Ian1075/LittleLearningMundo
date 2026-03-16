@@ -3,7 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 
 /// <summary>
-/// 處理導覽演出。修正：確保在演出結束時，攝影機能平滑回歸玩家跟隨模式。
+/// 處理電影感演出。
+/// 支援由 NPCController 逐步觸發對應的特寫運鏡。
 /// </summary>
 [ExecuteAlways]
 public class StoryVisualManager : MonoBehaviour
@@ -15,18 +16,16 @@ public class StoryVisualManager : MonoBehaviour
     public CameraFollow cameraFollow; 
 
     [Header("演出參數")]
-    public float transitionSpeed = 3.0f;
+    [Range(1f, 10f)] public float transitionSpeed = 3.5f;
     public float fadeDuration = 1.0f;
-    public float focusWaitTime = 5.0f;
 
-    [Header("即時預覽工具")]
+    [Header("編輯器預覽工具")]
     public bool livePreview = false;
     public StoryData previewStoryData; 
     public int previewStepIndex = 0;
     public int previewProjectionIndex = -1; 
 
     private bool _isCinematicMode = false;
-    private Coroutine _cinematicRoutine;
 
     private void Awake()
     {
@@ -40,30 +39,33 @@ public class StoryVisualManager : MonoBehaviour
 
     private void Update()
     {
+        // 編輯器即時同步預覽邏輯
         if (!Application.isPlaying && livePreview && mainCamera != null && previewStoryData != null)
         {
-            UpdateEditorPreview();
+            if (previewStepIndex >= 0 && previewStepIndex < previewStoryData.steps.Count)
+            {
+                var step = previewStoryData.steps[previewStepIndex];
+                
+                if (previewProjectionIndex == -1)
+                {
+                    BuildingZone bZone = FindBuildingZone(step.locationID);
+                    if (bZone != null && bZone.cinematicCameraNode != null)
+                        ApplyViewInstant(bZone.cinematicCameraNode.position, bZone.cinematicCameraNode.rotation);
+                }
+                else if (previewProjectionIndex >= 0 && previewProjectionIndex < step.projectionSteps.Count)
+                {
+                    var proj = step.projectionSteps[previewProjectionIndex];
+                    if (proj.cameraNode != null)
+                        ApplyViewInstant(proj.cameraNode.position, proj.cameraNode.rotation);
+                }
+            }
         }
     }
 
-    private void UpdateEditorPreview()
+    private void ApplyViewInstant(Vector3 pos, Quaternion rot)
     {
-        if (previewStepIndex >= 0 && previewStepIndex < previewStoryData.steps.Count)
-        {
-            var step = previewStoryData.steps[previewStepIndex];
-            if (previewProjectionIndex == -1)
-            {
-                BuildingZone bZone = FindBuildingZone(step.locationID);
-                if (bZone != null && bZone.cinematicCameraNode != null)
-                    ApplyView(bZone.cinematicCameraNode.position, bZone.cinematicCameraNode.rotation);
-            }
-            else if (previewProjectionIndex >= 0 && previewProjectionIndex < step.projections.Count)
-            {
-                var proj = step.projections[previewProjectionIndex];
-                if (proj.cameraNode != null)
-                    ApplyView(proj.cameraNode.position, proj.cameraNode.rotation);
-            }
-        }
+        mainCamera.transform.position = pos;
+        mainCamera.transform.rotation = rot;
     }
 
     private BuildingZone FindBuildingZone(string id)
@@ -73,83 +75,71 @@ public class StoryVisualManager : MonoBehaviour
         return null;
     }
 
-    private void ApplyView(Vector3 pos, Quaternion rot)
-    {
-        mainCamera.transform.position = pos;
-        mainCamera.transform.rotation = rot;
-    }
-
-    public void StartCinematic(BuildingZone zone, List<StoryData.ProjectionData> projections)
+    /// <summary>
+    /// 第一步：進入建築物大遠景
+    /// </summary>
+    public void ShowCinematicIntro(BuildingZone zone)
     {
         if (zone == null || !Application.isPlaying) return;
-        
         _isCinematicMode = true;
         
-        // 1. 禁用玩家跟隨
         if (cameraFollow != null) cameraFollow.enabled = false;
 
-        // 2. 開始運鏡序列
-        if (_cinematicRoutine != null) StopCoroutine(_cinematicRoutine);
-        _cinematicRoutine = StartCoroutine(CinematicSequence(zone, projections));
-    }
-
-    private IEnumerator CinematicSequence(BuildingZone zone, List<StoryData.ProjectionData> projections)
-    {
-        // 先飛向大遠景
         if (zone.cinematicCameraNode != null)
         {
-            yield return StartCoroutine(MoveCamera(zone.cinematicCameraNode.position, zone.cinematicCameraNode.rotation));
-            yield return new WaitForSeconds(0.5f);
-        }
-
-        foreach (var proj in projections)
-        {
-            if (!_isCinematicMode) yield break;
-
-            if (proj.quad != null && proj.image != null)
-            {
-                proj.quad.gameObject.SetActive(true);
-                Renderer r = proj.quad.GetComponent<Renderer>();
-                if (r is SpriteRenderer sr) sr.sprite = proj.image;
-                else if (r is MeshRenderer mr) mr.material.mainTexture = proj.image.texture;
-                
-                SetAlpha(r, 0);
-                StartCoroutine(FadeRenderer(r, true));
-            }
-
-            if (proj.cameraNode != null)
-            {
-                yield return StartCoroutine(MoveCamera(proj.cameraNode.position, proj.cameraNode.rotation));
-            }
-
-            yield return new WaitForSeconds(focusWaitTime);
+            StopAllCoroutines();
+            StartCoroutine(MoveCamera(zone.cinematicCameraNode.position, zone.cinematicCameraNode.rotation));
         }
     }
 
     /// <summary>
-    /// 結束演出並恢復一般攝影機
+    /// 第二步：切換到指定的照片特寫位
     /// </summary>
-    public void EndCinematic(BuildingZone zone)
+    public void ShowStepVisual(StoryData.ProjectionStep step)
     {
-        if (!Application.isPlaying) return;
-        
+        if (step == null || !_isCinematicMode || !Application.isPlaying) return;
+
+        // 1. 照片淡入
+        if (step.quad != null && step.image != null)
+        {
+            step.quad.gameObject.SetActive(true);
+            Renderer r = step.quad.GetComponent<Renderer>();
+            if (r is SpriteRenderer sr) { sr.sprite = step.image; StartCoroutine(FadeRenderer(sr, true)); }
+            else if (r is MeshRenderer mr) { mr.material.mainTexture = step.image.texture; StartCoroutine(FadeRenderer(mr, true)); }
+        }
+
+        // 2. 攝影機運鏡到該步驟的 Empty Object
+        if (step.cameraNode != null)
+        {
+            StopAllCoroutines();
+            StartCoroutine(MoveCamera(step.cameraNode.position, step.cameraNode.rotation));
+        }
+    }
+
+    /// <summary>
+    /// 結束演出，淡出所有照片並恢復玩家相機
+    /// </summary>
+    public void EndCinematic(StoryData.StoryStep currentStep)
+    {
+        if (!_isCinematicMode || !Application.isPlaying) return;
         _isCinematicMode = false;
         
-        if (_cinematicRoutine != null) StopCoroutine(_cinematicRoutine);
+        StopAllCoroutines();
 
-        // 隱藏該地點的所有照片
-        if (zone != null)
+        // 淡出並隱藏該地點的所有照片
+        if (currentStep != null)
         {
-            // 這裡可以透過 StoryManager 傳入目前的 projections 來關閉
-            // 或是簡單地讓 Zone 自己處理
+            foreach (var proj in currentStep.projectionSteps)
+            {
+                if (proj.quad != null)
+                {
+                    Renderer r = proj.quad.GetComponent<Renderer>();
+                    if (r != null) StartCoroutine(FadeRenderer(r, false));
+                }
+            }
         }
 
-        // 恢復跟隨腳本
-        if (cameraFollow != null)
-        {
-            cameraFollow.enabled = true;
-            Debug.Log("[VisualManager] 攝影機跟隨已恢復。");
-        }
+        if (cameraFollow != null) cameraFollow.enabled = true;
     }
 
     private IEnumerator MoveCamera(Vector3 targetPos, Quaternion targetRot)
@@ -165,6 +155,8 @@ public class StoryVisualManager : MonoBehaviour
             mainCamera.transform.rotation = Quaternion.Slerp(startRot, targetRot, smoothT);
             yield return null;
         }
+        mainCamera.transform.position = targetPos;
+        mainCamera.transform.rotation = targetRot;
     }
 
     private IEnumerator FadeRenderer(Renderer r, bool fadeIn)
