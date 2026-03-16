@@ -2,7 +2,7 @@ using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
-/// 管理主線導覽流程。確保在對話結束前不會錯誤關閉視覺效果。
+/// 管理主線劇本。修正：在結束導覽時，確保攝影機恢復。
 /// </summary>
 public class StoryManager : MonoBehaviour
 {
@@ -29,7 +29,7 @@ public class StoryManager : MonoBehaviour
 
     public void StartStory()
     {
-        if (currentStory == null || currentStory.steps.Count == 0) return;
+        if (currentStory == null) return;
         _currentStepIndex = 0;
         ExecuteStep();
     }
@@ -46,33 +46,17 @@ public class StoryManager : MonoBehaviour
         if (storyNPC != null) storyNPC.ExecuteNavigation(step.locationID);
     }
 
-    /// <summary>
-    /// 啟動抵達站點的視覺演出 (鏡頭與投影)
-    /// </summary>
-    public void NotifyArrivalVisuals(BuildingZone zone)
-    {
-        _activeZone = zone;
-        var step = GetCurrentStep();
-        if (step != null && StoryVisualManager.Instance != null)
-        {
-            StoryVisualManager.Instance.StartCinematic(zone, step.projectionImage);
-        }
-    }
-
-    /// <summary>
-    /// 當該站介紹完畢 (玩家點完對話)，由 NPCController 呼叫
-    /// </summary>
     public void OnStepArrival()
     {
-        // 1. 關閉視覺演出 (歸還相機)
-        if (_activeZone != null && StoryVisualManager.Instance != null)
+        // 這一站結束了，恢復攝影機
+        if (StoryVisualManager.Instance != null)
         {
             StoryVisualManager.Instance.EndCinematic(_activeZone);
         }
 
-        // 2. 邁向下一站
         _currentStepIndex++;
-        Invoke(nameof(ExecuteStep), 2.5f);
+        // 延遲一段時間後前往下一站
+        Invoke(nameof(ExecuteStep), 2.0f);
     }
 
     private void TriggerStoryCompletion()
@@ -88,10 +72,34 @@ public class StoryManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 徹底清理導覽狀態並切換回自由模式
+    /// </summary>
     private void CleanupAndSwitchMode()
     {
+        Debug.Log("[StoryManager] 導覽正式結束，執行清理。");
+        
+        // 1. 確保攝影機一定恢復
+        if (StoryVisualManager.Instance != null)
+        {
+            StoryVisualManager.Instance.EndCinematic(_activeZone);
+        }
+
+        // 2. NPC 狀態清理
         if (storyNPC != null) storyNPC.EndInteraction();
+
+        // 3. 切換模式
         if (GameModeManager.Instance != null)
             GameModeManager.Instance.SetGameMode(GameModeManager.GameMode.FreeMode);
+    }
+
+    public void NotifyArrivalVisuals(BuildingZone zone)
+    {
+        _activeZone = zone;
+        var step = GetCurrentStep();
+        if (step != null && StoryVisualManager.Instance != null)
+        {
+            StoryVisualManager.Instance.StartCinematic(zone, step.projections);
+        }
     }
 }

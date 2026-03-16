@@ -6,7 +6,8 @@ using OllamaIntegration.Models;
 using Newtonsoft.Json.Linq;
 
 /// <summary>
-/// NPC 核心控制器：確保抵達後的介紹會正確顯示對話，並等待玩家確認。
+/// NPC 核心控制器：將多張圖片的特定描述整合進 AI 請求中。
+/// 修復：修正了 Start 方法的語法錯誤以及遊戲模式判定的類型衝突。
 /// </summary>
 public class NPCController : MonoBehaviour
 {
@@ -44,58 +45,64 @@ public class NPCController : MonoBehaviour
     public void StartTalking()
     {
         if (identity == null) return;
-        bool wasNavigating = (currentState == NPCState.Navigating);
-        if (wasNavigating) navigator.StopMoving();
+        if (currentState == NPCState.Navigating) navigator.StopMoving();
         
         currentState = NPCState.Talking;
         if (playerController != null) playerController.SetState(PlayerController.PlayerState.Talking);
 
         BuildingZone currentZone = sensor != null ? sensor.GetCurrentZone() : null;
 
-        // 抵達站點觸發
-        if (isGuide && wasNavigating && currentZone != null)
-        {
+        if (isGuide && currentState != NPCState.Navigating && currentZone != null)
             HandleArrivalIntroduction(currentZone);
-        }
         else
-        {
             chatUI.ShowNPCResponse(identity.npcName, identity.defaultGreeting, EndInteraction, SwitchToInputMode);
-        }
     }
 
     private void SwitchToInputMode() => chatUI.OpenPlayerInput(OnPlayerSubmit);
 
     private async void HandleArrivalIntroduction(BuildingZone zone)
     {
-        bool isMainStory = (isStoryNPC && GameModeManager.Instance != null && GameModeManager.Instance.currentMode == GameModeManager.GameMode.MainStory);
-        
-        // 1. 立即啟動視覺演出 (切換鏡頭)
-        if (isMainStory) StoryManager.Instance?.NotifyArrivalVisuals(zone);
-
-        // 2. 準備 UI
-        currentState = NPCState.Thinking;
-        _currentStreamText = "";
-        _pendingToolCall = null;
-        chatUI.PrepareStreamingResponse(identity.npcName);
-
+        // 修正判定：檢查模式是否非 FreeMode
+        bool isMainStory = isStoryNPC && GameModeManager.Instance != null && GameModeManager.Instance.currentMode != GameModeManager.GameMode.FreeMode;
         StoryData.StoryStep storyStep = isMainStory ? StoryManager.Instance.GetCurrentStep() : null;
 
-        // 邏輯 A：照稿唸 (不使用 AI)
-        if (isMainStory && storyStep != null && !storyStep.useAISummary)
+        // 啟動視覺演出
+        if (isMainStory) StoryManager.Instance?.NotifyArrivalVisuals(zone);
+
+        // UI 準備
+        currentState = NPCState.Thinking;
+        _currentStreamText = ""; _pendingToolCall = null;
+        chatUI.PrepareStreamingResponse(identity.npcName);
+
+        // 整合知識庫
+        string combinedKnowledge = zone.knowledgeBase;
+        
+        if (storyStep != null)
         {
-            currentState = NPCState.Talking;
-            chatUI.ShowNPCResponse(identity.npcName, storyStep.description, EndInteraction, () => {
-                // 對話完畢，由玩家按 E 觸發下一站
-                if (isMainStory) StoryManager.Instance?.OnStepArrival();
-                else SwitchToInputMode();
-            });
-            return;
+            if (!string.IsNullOrEmpty(storyStep.description))
+                combinedKnowledge += $"\n[此站劇本描述：{storyStep.description}]";
+            
+            // 重要：遍歷所有圖片描述並加入 Prompt
+            if (storyStep.projections != null && storyStep.projections.Count > 0)
+            {
+                combinedKnowledge += "\n[現場展示的照片資訊如下，請在介紹時適時提及照片內容]：";
+                for (int i = 0; i < storyStep.projections.Count; i++)
+                {
+                    var p = storyStep.projections[i];
+                    if (p != null && !string.IsNullOrEmpty(p.imageDescription))
+                    {
+                        combinedKnowledge += $"\n照片 {i + 1} 描述：{p.imageDescription}";
+                    }
+                }
+            }
         }
 
-        // 邏輯 B：AI 介紹
-        string combinedKnowledge = zone.knowledgeBase;
-        if (storyStep != null && !string.IsNullOrEmpty(storyStep.description))
-            combinedKnowledge += $"\n[主線描述參考：{storyStep.description}]";
+        // 非 AI 模式直接顯示
+        if (isMainStory && storyStep != null && !storyStep.useAISummary)
+        {
+            chatUI.ShowNPCResponse(identity.npcName, storyStep.description, EndInteraction, () => StoryManager.Instance?.OnStepArrival());
+            return;
+        }
 
         string arrivalPrompt = string.Format(identity.arrivalEventPrompt, zone.displayName, combinedKnowledge);
         var history = memoryManager.PrepareMessages(arrivalPrompt, zone);
@@ -109,9 +116,7 @@ public class NPCController : MonoBehaviour
         memoryManager.SaveAssistantResponse(_currentStreamText);
         currentState = NPCState.Talking;
         
-        // 關鍵：FinishStreamingResponse 會處理打字機結束後的「按 E 繼續」
         chatUI.FinishStreamingResponse(EndInteraction, () => {
-            // 當玩家在對話框按完最後一個 E
             if (isMainStory) StoryManager.Instance?.OnStepArrival();
             else SwitchToInputMode();
         });
@@ -119,11 +124,8 @@ public class NPCController : MonoBehaviour
 
     private async void OnPlayerSubmit(string playerInput)
     {
-        currentState = NPCState.Thinking;
-        _currentStreamText = "";
-        _pendingToolCall = null;
+        currentState = NPCState.Thinking; _currentStreamText = ""; _pendingToolCall = null;
         chatUI.PrepareStreamingResponse(identity.npcName);
-
         BuildingZone currentZone = sensor != null ? sensor.GetCurrentZone() : null;
         var history = memoryManager.PrepareMessages(playerInput, currentZone);
         var request = ollamaService.CreateRequest(history, isGuide);
@@ -135,7 +137,6 @@ public class NPCController : MonoBehaviour
 
         memoryManager.SaveAssistantResponse(_currentStreamText);
         currentState = NPCState.Talking;
-
         if (isGuide && _pendingToolCall != null) {
             string locId = ExtractId(_pendingToolCall.function.arguments);
             if (!string.IsNullOrEmpty(locId)) { HandleNavigation(locId); return; }
@@ -166,18 +167,15 @@ public class NPCController : MonoBehaviour
         {
             currentState = NPCState.Navigating;
             if (playerController != null) playerController.SetState(PlayerController.PlayerState.Idle);
-            var path = WaypointPathfinder.FindPath(navigator.GetNearestNode(), targetNode);
-            navigator.StartPathNavigation(path, StartTalking);
+            navigator.StartPathNavigation(WaypointPathfinder.FindPath(navigator.GetNearestNode(), targetNode), StartTalking);
         }
         else StartTalking();
     }
 
     public void EndInteraction()
     {
-        chatUI.CloseChat();
-        currentState = NPCState.Idle;
-        if (playerController != null) 
-            playerController.SetState(PlayerController.PlayerState.Idle); 
+        chatUI.CloseChat(); currentState = NPCState.Idle;
+        if (playerController != null) playerController.SetState(PlayerController.PlayerState.Idle); 
     }
 
     public void SetHighlight(bool highlight) { if (visualManager != null) visualManager.SetHighlight(highlight); }
