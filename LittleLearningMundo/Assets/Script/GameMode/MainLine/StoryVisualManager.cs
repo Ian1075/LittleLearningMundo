@@ -1,12 +1,6 @@
 using UnityEngine;
 using System.Collections;
-using System.Collections.Generic;
 
-/// <summary>
-/// 處理電影感演出。
-/// 支援由 NPCController 逐步觸發對應的特寫運鏡。
-/// </summary>
-[ExecuteAlways]
 public class StoryVisualManager : MonoBehaviour
 {
     public static StoryVisualManager Instance { get; private set; }
@@ -19,76 +13,28 @@ public class StoryVisualManager : MonoBehaviour
     [Range(1f, 10f)] public float transitionSpeed = 3.5f;
     public float fadeDuration = 1.0f;
 
-    [Header("編輯器預覽工具")]
-    public bool livePreview = false;
-    public StoryData previewStoryData; 
-    public int previewStepIndex = 0;
-    public int previewProjectionIndex = -1; 
-
     private bool _isCinematicMode = false;
 
     private void Awake()
     {
-        if (Application.isPlaying)
-        {
-            if (Instance == null) Instance = this;
-            else Destroy(gameObject);
-            livePreview = false;
-        }
-    }
-
-    private void Update()
-    {
-        // 編輯器即時同步預覽邏輯
-        if (!Application.isPlaying && livePreview && mainCamera != null && previewStoryData != null)
-        {
-            if (previewStepIndex >= 0 && previewStepIndex < previewStoryData.steps.Count)
-            {
-                var step = previewStoryData.steps[previewStepIndex];
-                
-                if (previewProjectionIndex == -1)
-                {
-                    BuildingZone bZone = FindBuildingZone(step.locationID);
-                    if (bZone != null && bZone.cinematicCameraNode != null)
-                        ApplyViewInstant(bZone.cinematicCameraNode.position, bZone.cinematicCameraNode.rotation);
-                }
-                else if (previewProjectionIndex >= 0 && previewProjectionIndex < step.projectionSteps.Count)
-                {
-                    var proj = step.projectionSteps[previewProjectionIndex];
-                    if (proj.cameraNode != null)
-                        ApplyViewInstant(proj.cameraNode.position, proj.cameraNode.rotation);
-                }
-            }
-        }
-    }
-
-    private void ApplyViewInstant(Vector3 pos, Quaternion rot)
-    {
-        mainCamera.transform.position = pos;
-        mainCamera.transform.rotation = rot;
-    }
-
-    private BuildingZone FindBuildingZone(string id)
-    {
-        BuildingZone[] zones = Object.FindObjectsOfType<BuildingZone>();
-        foreach (var z in zones) if (z.locationID == id) return z;
-        return null;
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
     }
 
     /// <summary>
     /// 第一步：進入建築物大遠景
     /// </summary>
-    public void ShowCinematicIntro(BuildingZone zone)
+    public void ShowCinematicIntro(StoryData.StoryStep step)
     {
-        if (zone == null || !Application.isPlaying) return;
+        if (step == null || !Application.isPlaying) return;
         _isCinematicMode = true;
         
         if (cameraFollow != null) cameraFollow.enabled = false;
 
-        if (zone.cinematicCameraNode != null)
+        if (step.cinematicCameraNode != null)
         {
             StopAllCoroutines();
-            StartCoroutine(MoveCamera(zone.cinematicCameraNode.position, zone.cinematicCameraNode.rotation));
+            StartCoroutine(MoveCamera(step.cinematicCameraNode.position, step.cinematicCameraNode.rotation));
         }
     }
 
@@ -126,7 +72,6 @@ public class StoryVisualManager : MonoBehaviour
         
         StopAllCoroutines();
 
-        // 淡出並隱藏該地點的所有照片
         if (currentStep != null)
         {
             foreach (var proj in currentStep.projectionSteps)

@@ -38,11 +38,6 @@ public class ChatUIManager : MonoBehaviour
     private bool _isTyping = false;
     private string _currentSegmentShowing = "";
 
-    // --- 連續串流模式 (用於自由對話) ---
-    private bool _isContinuousStreaming = false;
-    private string _continuousStreamBuffer = ""; 
-    private int _streamCharPtr = 0;
-
     // --- 動態分段串流模式 (用於導覽解說) ---
     private Queue<string> _dynamicQueue = new Queue<string>();
     private bool _isDynamicStreaming = false;
@@ -64,11 +59,16 @@ public class ChatUIManager : MonoBehaviour
 
         if (choicePanel != null && choicePanel.activeSelf) return;
 
+        // 1. 全域 Esc 偵測：關閉對話 (主線模式下禁止取消，防止中斷導覽流程)
         if (Input.GetKeyDown(KeyCode.Escape))
         {
-            _onEscPressed?.Invoke();
-            CloseChat();
-            return;
+            bool isMainStory = GameModeManager.Instance != null && GameModeManager.Instance.currentMode == GameModeManager.GameMode.MainStory;
+            if (!isMainStory)
+            {
+                _onEscPressed?.Invoke();
+                CloseChat();
+                return;
+            }
         }
 
         if (!IsInputFieldActive())
@@ -79,24 +79,6 @@ public class ChatUIManager : MonoBehaviour
                 {
                     if (_isTyping) { StopAllCoroutines(); CompleteDynamicSegmentVisual(); }
                     else if (nextIcon != null && nextIcon.activeSelf) { PlayNextDynamicSegment(); }
-                }
-                else if (_isContinuousStreaming)
-                {
-                    if (_isTyping) { StopAllCoroutines(); CompleteContinuousSegmentVisual(); }
-                    else if (nextIcon != null && nextIcon.activeSelf)
-                    {
-                        nextIcon.SetActive(false);
-                        responseTMP.text = "";
-                        _currentSegmentShowing = "";
-                        
-                        if (_streamCharPtr < _continuousStreamBuffer.Length)
-                            StartCoroutine(ContinuousTypewriterCore());
-                        else
-                        {
-                            _isContinuousStreaming = false;
-                            _onFinishedAll?.Invoke();
-                        }
-                    }
                 }
             }
         }
@@ -119,7 +101,7 @@ public class ChatUIManager : MonoBehaviour
     public void CloseChat()
     {
         StopAllCoroutines();
-        _isTyping = _isContinuousStreaming = _isDynamicStreaming = false;
+        _isTyping = _isDynamicStreaming = false;
         
         if (background) background.SetActive(false);
         if (nameTMP) nameTMP.gameObject.SetActive(false);
@@ -134,10 +116,7 @@ public class ChatUIManager : MonoBehaviour
     // =     動態分段串流 (Dynamic Segment)       =
     // ==========================================
 
-    /// <summary>
-    /// 初始化動態分段隊列，準備接收即時拆分的句子。
-    /// </summary>
-    public void StartDynamicSegmentedStream(string npcName, Action onEsc, Action onAllFinished)
+    public void StartDynamicSegmentedStream(string npcName, Action onEsc, Action onAllFinished, string waitingText = "學長正在整理思緒...")
     {
         background.SetActive(true);
         if (nameTMP) { nameTMP.gameObject.SetActive(true); nameTMP.text = npcName; }
@@ -157,31 +136,23 @@ public class ChatUIManager : MonoBehaviour
         _isWaitingForDynamicSegment = true;
         _isTyping = false;
 
-        responseTMP.text = "學長正在整理思緒...";
+        responseTMP.text = waitingText;
     }
 
-    /// <summary>
-    /// 即時接收 AI 回傳的字串，一湊滿整句就推入隊列播放。
-    /// </summary>
     public void AppendDynamicStreamChunk(string chunk)
     {
         if (!_isDynamicStreaming) return;
 
         _dynamicBuffer += chunk;
-        
-        // 尋找句號、驚嘆號等標點符號作為分割點
         string pattern = @"(?<=[。！？；])";
         string[] parts = Regex.Split(_dynamicBuffer, pattern);
 
-        _dynamicBuffer = ""; // 清空緩衝，準備裝載剩餘或未完成的字元
+        _dynamicBuffer = ""; 
         for (int i = 0; i < parts.Length; i++)
         {
             if (i == parts.Length - 1)
             {
-                // 最後一段可能還沒遇到標點符號，放回緩衝區等待
                 _dynamicBuffer = parts[i];
-                
-                // 防呆機制：如果 AI 忘記加標點符號，字數太長就強制截斷成一句
                 if (_dynamicBuffer.Length > maxCharsPerSegment)
                 {
                     _dynamicQueue.Enqueue(_dynamicBuffer);
@@ -198,16 +169,12 @@ public class ChatUIManager : MonoBehaviour
             }
         }
 
-        // 如果目前 UI 正在空等，立刻播放剛解析出來的句子
         if (_isWaitingForDynamicSegment && _dynamicQueue.Count > 0)
         {
             PlayNextDynamicSegment();
         }
     }
 
-    /// <summary>
-    /// AI 串流完全結束時呼叫，強迫輸出緩衝區最後的零星文字。
-    /// </summary>
     public void FinishDynamicStream()
     {
         if (!_isDynamicStreaming) return;
@@ -242,14 +209,12 @@ public class ChatUIManager : MonoBehaviour
         {
             if (_isDynamicStreamEnded)
             {
-                // 所有內容播放完畢
                 _isDynamicStreaming = false;
                 if (nextIcon) nextIcon.SetActive(false);
                 _onFinishedAll?.Invoke();
             }
             else
             {
-                // 字句還在生成中，稍微等一下
                 _isWaitingForDynamicSegment = true;
                 responseTMP.text = "（學長思考中...）";
                 if (nextIcon) nextIcon.SetActive(false);
@@ -264,113 +229,12 @@ public class ChatUIManager : MonoBehaviour
         if (nextIcon) nextIcon.SetActive(true);
     }
 
-    private IEnumerator TypeWithGlitch(string targetText)
-    {
-        _isTyping = true;
-        responseTMP.text = "";
-        string currentText = "";
-
-        for (int i = 0; i < targetText.Length; i++)
-        {
-            char finalChar = targetText[i];
-            if (char.IsWhiteSpace(finalChar)) {
-                currentText += finalChar;
-                responseTMP.text = currentText;
-                continue;
-            }
-            for (int j = 0; j < scrambleCount; j++) {
-                responseTMP.text = currentText + _glitchChars[UnityEngine.Random.Range(0, _glitchChars.Length)];
-                yield return new WaitForSeconds(scrambleSpeed);
-            }
-            currentText += finalChar;
-            responseTMP.text = currentText;
-            yield return new WaitForSeconds(charDelay);
-        }
-        _isTyping = false;
-        if (nextIcon) nextIcon.SetActive(true);
-    }
-
-    /// <summary>
-    /// 一般非串流的對話，也統一利用這個強大的隊列系統一次性載入
-    /// </summary>
     public void ShowNPCResponse(string npcName, string content, Action onEsc, Action onAllFinished)
     {
         StartDynamicSegmentedStream(npcName, onEsc, onAllFinished);
         AppendDynamicStreamChunk(content);
         FinishDynamicStream();
     }
-
-
-    // ==========================================
-    // =        連續串流模式 (保留給自由對話)        =
-    // ==========================================
-
-    public void PrepareStreamingResponse(string npcName)
-    {
-        _continuousStreamBuffer = ""; _streamCharPtr = 0; _currentSegmentShowing = "";
-        _isContinuousStreaming = true;
-
-        if (background) background.SetActive(true);
-        if (nameTMP) { nameTMP.gameObject.SetActive(true); nameTMP.text = npcName; }
-        if (responseTMP) { responseTMP.gameObject.SetActive(true); responseTMP.text = "..."; }
-        
-        if (inputArea) inputArea.SetActive(false);
-        if (enterBtn) enterBtn.gameObject.SetActive(false);
-        if (nextIcon) nextIcon.SetActive(false);
-        if (choicePanel) choicePanel.SetActive(false);
-
-        StopAllCoroutines();
-        StartCoroutine(ContinuousTypewriterCore());
-    }
-
-    public void UpdateStreamingText(string fullText)
-    {
-        _continuousStreamBuffer = Regex.Replace(fullText, @"[\r\n]+", "").TrimStart();
-    }
-
-    public void FinishStreamingResponse(Action onEsc, Action onAllFinished)
-    {
-        _onEscPressed = onEsc; _onFinishedAll = onAllFinished;
-        _isContinuousStreaming = false; 
-    }
-
-    private IEnumerator ContinuousTypewriterCore()
-    {
-        _isTyping = true;
-        int currentSegmentCount = 0;
-        while (_isContinuousStreaming || _streamCharPtr < _continuousStreamBuffer.Length)
-        {
-            if (_streamCharPtr < _continuousStreamBuffer.Length)
-            {
-                char c = _continuousStreamBuffer[_streamCharPtr];
-                bool isSegmentBreak = "。！？；".Contains(c.ToString());
-                if ((isSegmentBreak || currentSegmentCount >= maxCharsPerSegment) && _streamCharPtr < _continuousStreamBuffer.Length - 1)
-                {
-                    yield return StartCoroutine(TypeSingleCharWithGlitch(c));
-                    _streamCharPtr++; break; 
-                }
-                yield return StartCoroutine(TypeSingleCharWithGlitch(c));
-                _streamCharPtr++; currentSegmentCount++;
-            }
-            else yield return null;
-        }
-        _isTyping = false;
-        if (nextIcon) nextIcon.SetActive(true);
-    }
-
-    private void CompleteContinuousSegmentVisual()
-    {
-        _isTyping = false;
-        while (_streamCharPtr < _continuousStreamBuffer.Length)
-        {
-            char c = _continuousStreamBuffer[_streamCharPtr];
-            _currentSegmentShowing += c; _streamCharPtr++;
-            if ("。！？；".Contains(c.ToString()) || _currentSegmentShowing.Length >= maxCharsPerSegment) break;
-        }
-        responseTMP.text = _currentSegmentShowing;
-        if (nextIcon) nextIcon.SetActive(true);
-    }
-
 
     // ==========================================
     // =           共用 UI 控制與輸入             =
@@ -430,20 +294,29 @@ public class ChatUIManager : MonoBehaviour
 
     public bool IsInputFieldActive() => inputArea != null && inputArea.activeSelf;
 
-    private IEnumerator TypeSingleCharWithGlitch(char c)
+    private IEnumerator TypeWithGlitch(string targetText)
     {
-        if (char.IsWhiteSpace(c)) { 
-            _currentSegmentShowing += c; 
-            responseTMP.text = _currentSegmentShowing; 
-            yield break; 
-        }
-        for (int j = 0; j < scrambleCount; j++)
+        _isTyping = true;
+        responseTMP.text = "";
+        string currentText = "";
+
+        for (int i = 0; i < targetText.Length; i++)
         {
-            responseTMP.text = _currentSegmentShowing + _glitchChars[UnityEngine.Random.Range(0, _glitchChars.Length)];
-            yield return new WaitForSeconds(scrambleSpeed);
+            char finalChar = targetText[i];
+            if (char.IsWhiteSpace(finalChar)) {
+                currentText += finalChar;
+                responseTMP.text = currentText;
+                continue;
+            }
+            for (int j = 0; j < scrambleCount; j++) {
+                responseTMP.text = currentText + _glitchChars[UnityEngine.Random.Range(0, _glitchChars.Length)];
+                yield return new WaitForSeconds(scrambleSpeed);
+            }
+            currentText += finalChar;
+            responseTMP.text = currentText;
+            yield return new WaitForSeconds(charDelay);
         }
-        _currentSegmentShowing += c;
-        responseTMP.text = _currentSegmentShowing;
-        yield return new WaitForSeconds(charDelay);
+        _isTyping = false;
+        if (nextIcon) nextIcon.SetActive(true);
     }
 }

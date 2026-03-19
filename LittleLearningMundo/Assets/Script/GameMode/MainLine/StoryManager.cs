@@ -36,7 +36,14 @@ public class StoryManager : MonoBehaviour
     {
         if (_currentStepIndex >= currentStory.steps.Count)
         {
-            Debug.Log("<color=green>[主線結束]</color>");
+            Debug.Log("<color=green>[主線全路線結束！解鎖筆記]</color>");
+            
+            // --- 關鍵新增：在這裡通知 ProgressManager 解鎖這條路線的筆記 ---
+            if (ProgressManager.Instance != null)
+            {
+                ProgressManager.Instance.UnlockNoteForStory(currentStory);
+            }
+
             if (storyNPC != null)
             {
                 storyNPC.chatUI.ShowNPCResponse(
@@ -59,7 +66,6 @@ public class StoryManager : MonoBehaviour
 
     public void OnStepArrival()
     {
-        // 這一站介紹完畢，通知視覺管理器關閉所有該站的照片並恢復鏡頭
         var step = GetCurrentStep();
         if (StoryVisualManager.Instance != null && step != null)
         {
@@ -67,7 +73,6 @@ public class StoryManager : MonoBehaviour
         }
 
         _currentStepIndex++;
-        // 延遲一段時間後前往下一站
         Invoke(nameof(ExecuteStep), 2.0f);
     }
 

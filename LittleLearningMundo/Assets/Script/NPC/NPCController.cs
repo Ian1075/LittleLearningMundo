@@ -72,7 +72,7 @@ public class NPCController : MonoBehaviour
 
         if (isMainStory && storyStep != null && !storyStep.useAISummary)
         {
-            StoryVisualManager.Instance?.ShowCinematicIntro(zone);
+            StoryVisualManager.Instance?.ShowCinematicIntro(storyStep);
             chatUI.ShowNPCResponse(identity.npcName, storyStep.baseIntroduction, EndInteraction, () => {
                 if (isMainStory) StoryManager.Instance?.OnStepArrival();
                 else SwitchToInputMode();
@@ -86,9 +86,8 @@ public class NPCController : MonoBehaviour
 
         if (isMainStory && storyStep != null && storyStep.projectionSteps != null && storyStep.projectionSteps.Count > 0)
         {
-            StoryVisualManager.Instance?.ShowCinematicIntro(zone);
+            StoryVisualManager.Instance?.ShowCinematicIntro(storyStep);
             
-            // 清理上一站的歷史任務與緩存
             _activePhotoFetches.Clear();
             _activeQuestionFetches.Clear();
             _preFetchedResponses.Clear();
@@ -98,7 +97,11 @@ public class NPCController : MonoBehaviour
         }
         else 
         {
-            chatUI.PrepareStreamingResponse(identity.npcName);
+            chatUI.StartDynamicSegmentedStream(identity.npcName, EndInteraction, () => {
+                if (isMainStory) StoryManager.Instance?.OnStepArrival();
+                else SwitchToInputMode();
+            });
+
             string combinedKnowledge = zone.knowledgeBase;
             if (storyStep != null && !string.IsNullOrEmpty(storyStep.baseIntroduction))
                 combinedKnowledge += $"\n[劇情描述提示：{storyStep.baseIntroduction}]";
@@ -109,16 +112,13 @@ public class NPCController : MonoBehaviour
 
             await ollamaService.apiClient.SendChatStreamAsync(request, (chunk) => {
                 _currentStreamText += chunk;
-                chatUI.UpdateStreamingText(_currentStreamText);
+                chatUI.AppendDynamicStreamChunk(chunk);
             }, null);
 
             memoryManager.SaveAssistantResponse(_currentStreamText);
             currentState = NPCState.Talking;
             
-            chatUI.FinishStreamingResponse(EndInteraction, () => {
-                if (isMainStory) StoryManager.Instance?.OnStepArrival();
-                else SwitchToInputMode();
-            });
+            chatUI.FinishDynamicStream();
         }
     }
 
@@ -148,8 +148,7 @@ public class NPCController : MonoBehaviour
         {
             if (!fetchTask.IsCompleted)
             {
-                chatUI.PrepareStreamingResponse(identity.npcName);
-                chatUI.UpdateStreamingText("學長正在整理思緒...");
+                chatUI.StartDynamicSegmentedStream(identity.npcName, EndInteraction, null, "學長正在整理思緒...");
             }
             await fetchTask;
             
@@ -242,7 +241,13 @@ public class NPCController : MonoBehaviour
 
     private async Task PrefetchQuestionTask(int stepIdx, BuildingZone zone, StoryData.StoryStep stepData)
     {
-        string prompt = $"[系統強制指令]：請根據剛才介紹的照片內容，考玩家一個選擇題。\n出題方向提示：{stepData.projectionSteps[stepIdx].questionPrompt}\n【非常重要】：請務必呼叫 `ask_multiple_choice_question` 工具來出題，絕對不要輸出任何其他對話文字！";
+        // 【優化 1：強化 Prompt 系統指令】加入字數限制洗腦
+        string prompt = $"[系統強制指令]：請根據剛才介紹的照片內容，考玩家一個選擇題。\n" +
+                        $"出題方向提示：{stepData.projectionSteps[stepIdx].questionPrompt}\n" +
+                        $"【嚴格格式限制】(非常重要！違規會導致系統崩潰)：\n" +
+                        $"1. 題目(question)必須非常精簡，絕對不能超過一句話。\n" +
+                        $"2. 四個選項(包含正確與錯誤)「每一個選項都絕對不能超過 6 個字」！請提煉成最核心的名詞。\n" +
+                        $"3. 務必呼叫 `ask_multiple_choice_question` 工具，且絕對不要輸出任何其他對話文字！";
         
         var history = memoryManager.PrepareMessages(prompt, zone);
         var request = ollamaService.CreateRequest(history, false);
@@ -250,23 +255,24 @@ public class NPCController : MonoBehaviour
 
         if (request.tools == null) request.tools = new List<ToolDefinition>();
         
+        // 【優化 2：強化 Tool Schema 描述】在底層定義上再度施壓
         ToolDefinition qnaTool = new ToolDefinition()
         {
             type = "function",
             function = new FunctionDefinition()
             {
                 name = "ask_multiple_choice_question",
-                description = "向玩家提出四選一的選擇題",
+                description = "向玩家提出四選一的選擇題 (選項極短)",
                 parameters = new JObject
                 {
                     ["type"] = "object",
                     ["properties"] = new JObject
                     {
-                        ["question"] = new JObject { ["type"] = "string", ["description"] = "問題內容" },
-                        ["correct_option"] = new JObject { ["type"] = "string", ["description"] = "正確選項" },
-                        ["wrong_option_1"] = new JObject { ["type"] = "string", ["description"] = "錯誤選項1" },
-                        ["wrong_option_2"] = new JObject { ["type"] = "string", ["description"] = "錯誤選項2" },
-                        ["wrong_option_3"] = new JObject { ["type"] = "string", ["description"] = "錯誤選項3" }
+                        ["question"] = new JObject { ["type"] = "string", ["description"] = "精簡的問題內容，限單一句子" },
+                        ["correct_option"] = new JObject { ["type"] = "string", ["description"] = "正確選項，嚴格限制 6 個字以內" },
+                        ["wrong_option_1"] = new JObject { ["type"] = "string", ["description"] = "錯誤選項1，嚴格限制 6 個字以內" },
+                        ["wrong_option_2"] = new JObject { ["type"] = "string", ["description"] = "錯誤選項2，嚴格限制 6 個字以內" },
+                        ["wrong_option_3"] = new JObject { ["type"] = "string", ["description"] = "錯誤選項3，嚴格限制 6 個字以內" }
                     },
                     ["required"] = new JArray { "question", "correct_option", "wrong_option_1", "wrong_option_2", "wrong_option_3" }
                 }
@@ -295,8 +301,7 @@ public class NPCController : MonoBehaviour
             if (!qTask.IsCompleted)
             {
                 currentState = NPCState.Thinking;
-                chatUI.PrepareStreamingResponse(identity.npcName);
-                chatUI.UpdateStreamingText("學長正在準備考題...");
+                chatUI.StartDynamicSegmentedStream(identity.npcName, EndInteraction, null, "學長正在準備考題...");
             }
             await qTask;
         }
@@ -316,11 +321,12 @@ public class NPCController : MonoBehaviour
     {
         if (args is JObject obj)
         {
+            // 在這裡可以加一個安全過濾器，硬性截斷太長的字元，作為最終防線
             string question = obj["question"]?.ToString();
-            string correct = obj["correct_option"]?.ToString();
-            string w1 = obj["wrong_option_1"]?.ToString();
-            string w2 = obj["wrong_option_2"]?.ToString();
-            string w3 = obj["wrong_option_3"]?.ToString();
+            string correct = TruncateOption(obj["correct_option"]?.ToString());
+            string w1 = TruncateOption(obj["wrong_option_1"]?.ToString());
+            string w2 = TruncateOption(obj["wrong_option_2"]?.ToString());
+            string w3 = TruncateOption(obj["wrong_option_3"]?.ToString());
 
             chatUI.ShowMultipleChoice(question, correct, w1, w2, w3, (selectedOption) => {
                 EvaluateAnswer(selectedOption, correct, stepIdx, zone, stepData);
@@ -332,12 +338,19 @@ public class NPCController : MonoBehaviour
         }
     }
 
+    // 安全過濾器：萬一 AI 真的失控，我們直接把它截斷，保護 UI 不爆掉
+    private string TruncateOption(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        if (text.Length > 6) return text.Substring(0, 5) + "...";
+        return text;
+    }
+
     private async void EvaluateAnswer(string playerChoice, string correctOption, int stepIdx, BuildingZone zone, StoryData.StoryStep stepData)
     {
         currentState = NPCState.Thinking;
         _currentStreamText = "";
         
-        // 使用 3 個參數相容舊版，並透過外部手動覆寫思考中的文字
         chatUI.StartDynamicSegmentedStream(identity.npcName, EndInteraction, () => {
             DisplayCurrentTourStep(stepIdx + 1, zone, stepData);
         });
@@ -379,7 +392,14 @@ public class NPCController : MonoBehaviour
         currentState = NPCState.Thinking;
         _currentStreamText = "";
         _pendingToolCall = null;
-        chatUI.PrepareStreamingResponse(identity.npcName);
+        
+        chatUI.StartDynamicSegmentedStream(identity.npcName, EndInteraction, () => {
+            if (isGuide && _pendingToolCall != null) {
+                string locId = ExtractId(_pendingToolCall.function.arguments);
+                if (!string.IsNullOrEmpty(locId)) { HandleNavigation(locId); return; }
+            }
+            SwitchToInputMode();
+        }, "思考中...");
 
         BuildingZone currentZone = sensor != null ? sensor.GetCurrentZone() : null;
         var history = memoryManager.PrepareMessages(playerInput, currentZone);
@@ -387,17 +407,13 @@ public class NPCController : MonoBehaviour
 
         await ollamaService.apiClient.SendChatStreamAsync(request, (chunk) => {
             _currentStreamText += chunk;
-            chatUI.UpdateStreamingText(_currentStreamText);
+            chatUI.AppendDynamicStreamChunk(chunk);
         }, (tc) => { if (isGuide) _pendingToolCall = tc; });
 
         memoryManager.SaveAssistantResponse(_currentStreamText);
         currentState = NPCState.Talking;
 
-        if (isGuide && _pendingToolCall != null) {
-            string locId = ExtractId(_pendingToolCall.function.arguments);
-            if (!string.IsNullOrEmpty(locId)) { HandleNavigation(locId); return; }
-        }
-        chatUI.FinishStreamingResponse(EndInteraction, SwitchToInputMode);
+        chatUI.FinishDynamicStream();
     }
 
     private void HandleNavigation(string locId)
