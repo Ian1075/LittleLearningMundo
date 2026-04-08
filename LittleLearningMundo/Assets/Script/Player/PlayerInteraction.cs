@@ -22,6 +22,8 @@ public class PlayerInteraction : MonoBehaviour
             return;
         }
 
+        if (StoryManager.Instance != null && StoryManager.Instance.isStoryRunning) return;
+
         UpdateNearestNPC();
 
         if (Input.GetKeyDown(interactKey))
@@ -63,20 +65,22 @@ public class PlayerInteraction : MonoBehaviour
 
         if (_currentNearestNpc.currentState == NPCController.NPCState.Idle)
         {
-            // 模式切換判定
-            if (_currentNearestNpc.isStoryNPC && 
-                GameModeManager.Instance != null && 
-                GameModeManager.Instance.currentMode == GameModeManager.GameMode.FreeMode)
-            {
-                Debug.Log($"[Interaction] 啟動主線模式：{_currentNearestNpc.npcName}");
-                GameModeManager.Instance.SetGameMode(GameModeManager.GameMode.MainStory);
-                return;
-            }
+            string npcName = _currentNearestNpc.gameObject.name;
+            
+            // 檢查該 NPC 是否有未完成的主線
+            StoryData availableStory = ProgressManager.Instance.GetAvailableStoryForNPC(npcName);
 
-            if (playerController != null) 
-                playerController.SetState(PlayerController.PlayerState.Talking);
-                
-            _currentNearestNpc.StartTalking();
+            if (availableStory != null)
+            {
+                // 開啟主線導覽
+                if (playerController != null) playerController.SetState(PlayerController.PlayerState.Talking);
+                StoryManager.Instance.StartStory(availableStory, _currentNearestNpc);
+            }
+            else
+            {
+                // 日常聊天
+                _currentNearestNpc.StartTalking();
+            }
         }
     }
 }

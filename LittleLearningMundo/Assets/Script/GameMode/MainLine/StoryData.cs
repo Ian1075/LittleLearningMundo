@@ -46,13 +46,18 @@ public class StoryData : MonoBehaviour
     [Header("劇情全域設定")]
     public string storyTitle = "新生入學導覽";
 
+    [Header("負責此主線的 NPC (新增)")]
+    [Tooltip("此名稱必須與場景中 NPC 物件的名字完全一致")]
+    public string responsibleNPCName; 
+
     [TextArea(2, 5)]
     public string endStoryDialogue = "好啦，今天的校園導覽就到這邊結束囉！祝你在成大生活愉快！";
 
     [Header("筆記本設定 (整條路線完成後解鎖)")]
     public string noteTitle = "資工系館初探";
+    public Sprite noteCoverImage; 
     [TextArea(3, 8)]
-    public string noteContent = "今天學長帶我參觀了資工系館...";
+    public string noteContent = "今天參觀了資工系館...";
 
     [Header("導覽步驟清單")]
     public List<StoryStep> steps = new List<StoryStep>();

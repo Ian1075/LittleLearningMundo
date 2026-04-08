@@ -53,13 +53,16 @@ public class ChatUIManager : MonoBehaviour
 
     private void Update()
     {
+        // 1. 【最高權限攔截】暫停時不處理任何對話框輸入
+        if (SettingsUIManager.IsPaused) return;
+
         UpdateCanvasCamera();
 
         if (background == null || !background.activeSelf) return;
 
         if (choicePanel != null && choicePanel.activeSelf) return;
 
-        // 1. 全域 Esc 偵測：關閉對話 (主線模式下禁止取消，防止中斷導覽流程)
+        // 2. 全域 Esc 偵測：關閉對話 (主線模式下禁止取消，防止中斷導覽流程)
         if (Input.GetKeyDown(KeyCode.Escape))
         {
             bool isMainStory = GameModeManager.Instance != null && GameModeManager.Instance.currentMode == GameModeManager.GameMode.MainStory;
@@ -288,7 +291,7 @@ public class ChatUIManager : MonoBehaviour
         string text = inputField.text;
         if (inputArea) inputArea.SetActive(false);
         if (enterBtn) enterBtn.gameObject.SetActive(false);
-        if (responseTMP) { responseTMP.gameObject.SetActive(true); responseTMP.text = "..."; }
+        if (responseTMP) { responseTMP.gameObject.SetActive(true); responseTMP.text = "傳輸訊息中..."; }
         _onInputSubmitted?.Invoke(text);
     }
 

@@ -1,53 +1,71 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
+using NCKU.RAG; // 引用剛才定義的命名空間
 
-/// <summary>
-/// 負責從知識庫中檢索相關資訊
-/// </summary>
 public class RAGManager : MonoBehaviour
 {
-    [Header("知識庫設定")]
-    [Tooltip("將所有建立好的 KnowledgeFragment 拖入此處")]
-    public List<KnowledgeFragment> allKnowledge;
+    public static RAGManager Instance { get; private set; }
 
-    /// <summary>
-    /// 根據地點 ID 檢索相關知識
-    /// </summary>
-    /// <param name="locationID">建築物 ID</param>
-    /// <param name="limit">回傳幾條知識</param>
-    /// <returns>組合好的知識字串</returns>
-    public string GetContextByLocation(string locationID, int limit = 3)
+    [Header("配置")]
+    public string vectorDataFileName = "VectorDatabase"; 
+    [Range(0, 1)] public float similarityThreshold = 0.5f;
+
+    private VectorDatabase _db; // 這裡會自動指向 NCKU.RAG 裡的類別
+    private OllamaApiClient _apiClient;
+
+    private void Awake()
     {
-        // 1. 過濾出與該地點相關的知識
-        // 2. 依照優先級排序
-        // 3. 取出前 N 條
-        var relevantFragments = allKnowledge
-            .Where(f => f.locationID == locationID)
-            .OrderByDescending(f => f.priority)
-            .Take(limit)
-            .Select(f => f.content)
-            .ToList();
-
-        if (relevantFragments.Count == 0)
-            return "目前沒有關於此地點的特定背景資料。";
-
-        // 4. 將多條知識組合成一個 Context 字串
-        return "相關背景資料：\n" + string.Join("\n---\n", relevantFragments);
+        if (Instance == null) Instance = this;
+        LoadDatabase();
     }
 
-    /// <summary>
-    /// (進階) 根據關鍵字檢索知識 (簡單的關鍵字比對)
-    /// </summary>
-    public string SearchKnowledge(string query, int limit = 2)
+    private void Start()
     {
-        var relevantFragments = allKnowledge
-            .Where(f => query.Contains(f.locationID) || f.content.Contains(query))
-            .OrderByDescending(f => f.priority)
+        _apiClient = FindObjectOfType<OllamaApiClient>();
+    }
+
+    private void LoadDatabase()
+    {
+        TextAsset jsonFile = Resources.Load<TextAsset>(vectorDataFileName);
+        if (jsonFile != null)
+        {
+            _db = JsonUtility.FromJson<VectorDatabase>(jsonFile.text);
+            Debug.Log($"[RAG] 成功載入 {_db.entries.Count} 條向量知識碎片");
+        }
+    }
+
+    public async Task<string> SearchSemanticKnowledgeAsync(string userInput, string currentLocationName, int limit = 3)
+    {
+        if (_db == null || _apiClient == null) return "";
+
+        // 注入地點上下文優化搜尋
+        string augmentedQuery = $"[當前在：{currentLocationName}] " + userInput;
+        
+        float[] queryVector = await _apiClient.GetEmbeddingAsync(augmentedQuery);
+        if (queryVector == null) return "";
+
+        var results = _db.entries
+            .Select(e => new { e.content, score = CalculateCosineSimilarity(queryVector, e.vector) })
+            .Where(x => x.score >= similarityThreshold)
+            .OrderByDescending(x => x.score)
             .Take(limit)
-            .Select(f => f.content)
             .ToList();
 
-        return string.Join("\n", relevantFragments);
+        if (results.Count == 0) return "";
+        return string.Join("\n", results.Select(r => "• " + r.content));
+    }
+
+    private float CalculateCosineSimilarity(float[] vecA, float[] vecB)
+    {
+        float dotProduct = 0, magA = 0, magB = 0;
+        for (int i = 0; i < vecA.Length; i++)
+        {
+            dotProduct += vecA[i] * vecB[i];
+            magA += vecA[i] * vecA[i];
+            magB += vecB[i] * vecB[i];
+        }
+        return dotProduct / (Mathf.Sqrt(magA) * Mathf.Sqrt(magB));
     }
 }

@@ -9,41 +9,77 @@ using OllamaIntegration.Models;
 using Newtonsoft.Json;
 
 /// <summary>
-/// 支援串流 (Streaming) 的 Ollama 通訊客戶端。
-/// 包含完整的 OllamaStreamHandler 類別定義。
+/// 升級版：支援串流對話與向量提取 (Embeddings) 的 Ollama 客戶端。
 /// </summary>
 public class OllamaApiClient : MonoBehaviour
 {
     [Header("網路配置")]
-    public string apiUrl = "http://140.116.154.86:11434/api/chat";
+    [Tooltip("Ollama 伺服器基礎位址，例如 http://140.116.154.86:11434")]
+    public string baseHostUrl = "http://140.116.154.86:11434";
     
     [Header("偵錯設定")]
     public bool logFullPayload = true;
     public bool logFullJsonResponse = true; 
+
+    // --- 新增：Embedding 專用的資料結構 ---
+    [Serializable]
+    public class EmbeddingRequest { public string model; public string prompt; }
+    [Serializable]
+    public class EmbeddingResponse { public float[] embedding; }
+
+    /// <summary>
+    /// 新增功能：獲取文字的向量值 (Embedding)
+    /// 用於方案 A 的向量資料庫搜尋。
+    /// </summary>
+    public async Task<float[]> GetEmbeddingAsync(string text, string model = "nomic-embed-text")
+    {
+        string url = $"{baseHostUrl}/api/embeddings";
+        var payload = new EmbeddingRequest { model = model, prompt = text };
+        string jsonPayload = JsonConvert.SerializeObject(payload);
+
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+        {
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonPayload);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            var operation = request.SendWebRequest();
+            while (!operation.isDone) await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonConvert.DeserializeObject<EmbeddingResponse>(request.downloadHandler.text);
+                return response.embedding;
+            }
+            else
+            {
+                Debug.LogError($"<color=red>[Ollama Embedding Error]</color> {request.error}");
+                return null;
+            }
+        }
+    }
 
     /// <summary>
     /// 發送串流對話請求並重組 JSON 輸出日誌。
     /// </summary>
     public async Task SendChatStreamAsync(OllamaChatRequest payload, Action<string> onChunkReceived, Action<ToolCall> onToolCallReceived)
     {
+        string chatUrl = $"{baseHostUrl}/api/chat";
         payload.stream = true; 
         string jsonPayload = JsonConvert.SerializeObject(payload);
 
-        if (logFullPayload)
-        {
-            Debug.Log($"<color=yellow>[Ollama API Request]</color>\n{jsonPayload}");
-        }
+        if (logFullPayload) Debug.Log($"<color=yellow>[Ollama API Request]</color>\n{jsonPayload}");
 
         OllamaChatResponse fullResponse = new OllamaChatResponse();
         fullResponse.message = new OllamaMessageResponse { role = "assistant", content = "" };
         StringBuilder contentBuilder = new StringBuilder();
 
-        using (UnityWebRequest request = new UnityWebRequest(apiUrl, "POST"))
+        using (UnityWebRequest request = new UnityWebRequest(chatUrl, "POST"))
         {
             byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonPayload);
             request.uploadHandler = new UploadHandlerRaw(bodyRaw);
             
-            // 關鍵：這裡建立了 OllamaStreamHandler，定義在檔案下方
             var handler = new OllamaStreamHandler(false); 
             handler.OnChunkProcessed += (chunkJson) => {
                 try {
@@ -105,10 +141,11 @@ public class OllamaApiClient : MonoBehaviour
 
     public async Task<OllamaChatResponse> SendChatRequestAsync(OllamaChatRequest payload)
     {
+        string chatUrl = $"{baseHostUrl}/api/chat";
         payload.stream = false;
         string jsonPayload = JsonConvert.SerializeObject(payload);
 
-        using (UnityWebRequest request = new UnityWebRequest(apiUrl, "POST"))
+        using (UnityWebRequest request = new UnityWebRequest(chatUrl, "POST"))
         {
             byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonPayload);
             request.uploadHandler = new UploadHandlerRaw(bodyRaw);
@@ -130,12 +167,8 @@ public class OllamaApiClient : MonoBehaviour
 }
 
 // ----------------------------------------------------------------------------
-// 請確保以下類別定義有被複製到專案中
+// OllamaStreamHandler 類別定義保持不變
 // ----------------------------------------------------------------------------
-
-/// <summary>
-/// 自定義下載處理器，用於解析 Ollama 傳回的連續 JSON 流。
-/// </summary>
 public class OllamaStreamHandler : DownloadHandlerScript
 {
     public event Action<string> OnChunkProcessed;
@@ -149,27 +182,15 @@ public class OllamaStreamHandler : DownloadHandlerScript
     protected override bool ReceiveData(byte[] data, int dataLength)
     {
         if (data == null || dataLength == 0) return false;
-
-        // 將收到的 byte 轉換為字串
         string text = Encoding.UTF8.GetString(data, 0, dataLength);
-        
-        // Ollama 的串流格式是每行一個 JSON 物件，通常以 \n 分隔
         string[] lines = text.Split('\n');
 
         foreach (string line in lines)
         {
             string trimmed = line.Trim();
             if (string.IsNullOrEmpty(trimmed)) continue;
-
-            if (_shouldLog)
-            {
-                Debug.Log($"<color=yellow>[Ollama Raw Chunk]</color> {trimmed}");
-            }
-
-            // 觸發事件進行 JSON 解析
             OnChunkProcessed?.Invoke(trimmed);
         }
-
         return true;
     }
 }

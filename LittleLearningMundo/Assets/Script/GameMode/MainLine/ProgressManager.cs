@@ -3,46 +3,88 @@ using System;
 using System.Collections.Generic;
 
 /// <summary>
-/// 負責記錄玩家的導覽進度與解鎖的筆記。
+/// 管理玩家的導覽進度，與 AccountManager 存檔連動。
 /// </summary>
 public class ProgressManager : MonoBehaviour
 {
     public static ProgressManager Instance { get; private set; }
 
-    [Header("已解鎖的筆記")]
-    [Tooltip("注意：遊戲開始前請保持這裡為空 (Size = 0)，否則一開始就會直接顯示！")]
+    [Header("場景中的劇本庫")]
+    [Tooltip("請將場景中所有掛載 StoryData 的物件拖入此處")]
+    public List<StoryData> allStoriesInScene = new List<StoryData>();
+
+    [Header("進度設定")]
+    public int totalRoutesCount = 3;
+
+    [Header("當前玩家已解鎖清單")]
     public List<StoryData> completedStories = new List<StoryData>();
 
-    // 定義一個事件，當有新筆記解鎖時廣播給 UI
     public event Action<StoryData> OnNoteUnlocked;
 
     private void Awake()
     {
-        if (Instance == null)
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
+    }
+
+    private void Start()
+    {
+        // 從 AccountManager 加載存檔進度
+        if (AccountManager.Instance != null && AccountManager.Instance.CurrentPlayer != null)
         {
-            Instance = this;
+            LoadFromPlayer(AccountManager.Instance.CurrentPlayer);
         }
-        else
+    }
+
+    private void LoadFromPlayer(PlayerData data)
+    {
+        completedStories.Clear();
+        if (data.unlockedStoryTitles == null) return;
+
+        foreach (string title in data.unlockedStoryTitles)
         {
-            Destroy(gameObject);
+            StoryData s = allStoriesInScene.Find(x => x.storyTitle == title);
+            if (s != null) 
+            {
+                completedStories.Add(s);
+                OnNoteUnlocked?.Invoke(s); 
+            }
         }
     }
 
     /// <summary>
-    /// 完成某條路線的最後一個地點時呼叫，解鎖該路線專屬筆記
+    /// 檢查某個故事是否已經完成
     /// </summary>
-    public void UnlockNoteForStory(StoryData story)
+    public bool IsStoryCompleted(string storyTitle)
     {
-        if (story == null) return;
+        return completedStories.Exists(s => s.storyTitle == storyTitle);
+    }
 
-        // 避免重複加入相同的筆記
-        if (!completedStories.Contains(story))
+    /// <summary>
+    /// 尋找某位 NPC 負責且玩家尚未完成的故事
+    /// </summary>
+    public StoryData GetAvailableStoryForNPC(string npcName)
+    {
+        return allStoriesInScene.Find(s => s.responsibleNPCName == npcName && !IsStoryCompleted(s.storyTitle));
+    }
+
+    public void MarkStoryComplete(StoryData story)
+    {
+        if (story == null || completedStories.Contains(story)) return;
+
+        completedStories.Add(story);
+        OnNoteUnlocked?.Invoke(story);
+
+        // 同步儲存至帳號
+        if (AccountManager.Instance != null && AccountManager.Instance.CurrentPlayer != null)
         {
-            completedStories.Add(story);
-            Debug.Log($"<color=orange>[進度解鎖] 獲得新路線筆記：{story.noteTitle}</color>");
-            
-            // 通知 NotebookUIManager 更新畫面
-            OnNoteUnlocked?.Invoke(story);
+            if (!AccountManager.Instance.CurrentPlayer.unlockedStoryTitles.Contains(story.storyTitle))
+            {
+                AccountManager.Instance.CurrentPlayer.unlockedStoryTitles.Add(story.storyTitle);
+                AccountManager.Instance.SaveProgress();
+            }
         }
     }
+
+    public float GetProgressPercentage() => totalRoutesCount > 0 ? (float)completedStories.Count / totalRoutesCount : 0f;
 }

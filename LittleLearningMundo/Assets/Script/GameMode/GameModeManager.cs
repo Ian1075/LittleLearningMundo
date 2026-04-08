@@ -29,7 +29,7 @@ public class GameModeManager : MonoBehaviour
     }
 
     /// <summary>
-    /// 切換遊戲模式 (統一使用 SetGameMode 解決報錯)
+    /// 切換遊戲模式
     /// </summary>
     public void SetGameMode(GameMode newMode)
     {
@@ -40,8 +40,22 @@ public class GameModeManager : MonoBehaviour
 
         if (newMode == GameMode.MainStory)
         {
-            // 啟動主線故事邏輯
-            StoryManager.Instance?.StartStory();
+            // 修正：呼叫 StartStory 時必須提供劇本資料與 NPC 引用
+            if (StoryManager.Instance != null && storyGuideNPC != null)
+            {
+                // 從 ProgressManager 獲取目前 NPC 負責且玩家尚未完成的劇本
+                StoryData data = ProgressManager.Instance.GetAvailableStoryForNPC(storyGuideNPC.gameObject.name);
+                
+                if (data != null)
+                {
+                    StoryManager.Instance.StartStory(data, storyGuideNPC);
+                }
+                else
+                {
+                    Debug.LogWarning("[GameMode] 找不到該 NPC 負責的可執行劇本，退回自由模式。");
+                    SetGameMode(GameMode.FreeMode);
+                }
+            }
         }
     }
 
