@@ -45,6 +45,7 @@ public class NPCController : MonoBehaviour
 
     private void Start()
     {
+        LoadNPCStatus();
         if (autoStartGreeting) Invoke(nameof(StartTalking), 0.5f);
     }
 
@@ -282,6 +283,8 @@ public class NPCController : MonoBehaviour
         }
         enhancedInput += $"玩家問題：{playerInput}";
 
+        memoryManager.SaveUserRequest(playerInput);
+
         // 4. 開始串流對話 (保留你原本的 UI 處理)
         chatUI.StartDynamicSegmentedStream(identity.npcName, EndInteraction, () => {
             if (isGuide && _pendingToolCall != null) {
@@ -330,6 +333,24 @@ public class NPCController : MonoBehaviour
         chatUI.CloseChat();
         currentState = NPCState.Idle;
         playerController?.SetState(PlayerController.PlayerState.Idle); 
+    }
+
+    private void LoadNPCStatus()
+    {
+        if (AccountManager.Instance == null) return;
+
+        var account = AccountManager.Instance.CurrentPlayer;
+        var memory = account.npcMemories.Find(m => m.npcID == npcName);
+
+        if (memory != null)
+        {
+            // 如果存檔紀錄說已經結束導覽了，就把 isGuide 設為 false
+            if (memory.hasFinishedGuide)
+            {
+                isGuide = false;
+                Debug.Log($"{npcName} 讀取存檔：已非導覽員模式。");
+            }
+        }
     }
 
     public void SetHighlight(bool h) => visualManager?.SetHighlight(h);

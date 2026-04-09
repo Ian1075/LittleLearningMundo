@@ -84,6 +84,15 @@ public class StoryManager : MonoBehaviour
         {
             storyNPC.chatUI.ShowNPCResponse(storyNPC.identity.npcName, currentStory.endStoryDialogue, EndStoryCleanup, EndStoryCleanup);
             storyNPC.isGuide = false;
+            var account = AccountManager.Instance.CurrentPlayer;
+            var memory = account.npcMemories.Find(m => m.npcID == storyNPC.npcName);
+            
+            if (memory != null)
+            {
+                memory.hasFinishedGuide = true; // 標記為已結束
+                AccountManager.Instance.SaveProgress(); // 立即存檔到 JSON
+                Debug.Log($"{storyNPC.npcName} 導覽模式已永久關閉並存檔。");
+            }
         }
         else
         {

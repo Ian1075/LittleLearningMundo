@@ -3,15 +3,22 @@ using UnityEditor;
 using System.IO;
 using System.Threading.Tasks;
 using System.Collections.Generic;
-using NCKU.RAG;
+using NCKU.RAG; // 確保有引用命名空間
 
 public class RAGPreprocessor : EditorWindow
 {
+    private string rawTextPath = "Assets/Resources/RawKnowledge.txt";
+    private string serverUrl = "http://140.116.154.86:11434"; // 建議直接寫死或在介面輸入
+
     [MenuItem("Tools/NCKU RAG/建置向量資料庫")]
     public static void ShowWindow() => GetWindow<RAGPreprocessor>("RAG 建置器");
 
     private async void OnGUI()
     {
+        GUILayout.Label("RAG 向量化工具", EditorStyles.boldLabel);
+        rawTextPath = EditorGUILayout.TextField("原始文本路徑", rawTextPath);
+        serverUrl = EditorGUILayout.TextField("Ollama URL", serverUrl);
+
         if (GUILayout.Button("開始建置 (需執行 Ollama)"))
         {
             await Build();
@@ -20,27 +27,59 @@ public class RAGPreprocessor : EditorWindow
 
     private async Task Build()
     {
-        // 假設你有一個 RawKnowledge.json 包含簡單的 content 列表
-        string inputPath = Application.dataPath + "/Resources/RawKnowledge.json";
-        if (!File.Exists(inputPath)) { Debug.LogError("找不到原始資料！"); return; }
-
-        string rawJson = File.ReadAllText(inputPath);
-        // 這裡建議定義一個簡單的類別來讀取你的原始文字
-        List<string> lines = new List<string>(File.ReadAllLines(Application.dataPath + "/Resources/RawKnowledge.txt"));
-
-        VectorDatabase db = new VectorDatabase();
-        var client = FindObjectOfType<OllamaApiClient>();
-
-        for (int i = 0; i < lines.Count; i++)
+        if (!File.Exists(rawTextPath))
         {
-            EditorUtility.DisplayProgressBar("RAG 建置中", $"處理第 {i}/{lines.Count} 條", (float)i / lines.Count);
-            float[] vec = await client.GetEmbeddingAsync(lines[i]);
-            db.entries.Add(new KnowledgeEntry { content = lines[i], vector = vec });
+            Debug.LogError($"找不到原始資料：{rawTextPath}");
+            return;
         }
 
-        File.WriteAllText(Application.dataPath + "/Resources/VectorDatabase.json", JsonUtility.ToJson(db));
-        EditorUtility.ClearProgressBar();
-        AssetDatabase.Refresh();
-        Debug.Log("向量庫建置成功！");
+        // 讀取所有行
+        string[] lines = File.ReadAllLines(rawTextPath);
+        VectorDatabase db = new VectorDatabase();
+
+        // 解決 NullReferenceException：
+        // 我們直接在 Editor 下建立一個臨時的 Client，不依賴場景物件
+        GameObject tempGO = new GameObject("TempClient");
+        OllamaApiClient client = tempGO.AddComponent<OllamaApiClient>();
+        client.baseHostUrl = serverUrl;
+
+        try
+        {
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(lines[i])) continue;
+
+                EditorUtility.DisplayProgressBar("RAG 建置中", $"處理第 {i + 1}/{lines.Length} 條: {lines[i]}", (float)i / lines.Length);
+                
+                // 呼叫 API 獲取向量
+                float[] vec = await client.GetEmbeddingAsync(lines[i]);
+                
+                if (vec != null)
+                {
+                    db.entries.Add(new KnowledgeEntry { content = lines[i], vector = vec });
+                }
+                else
+                {
+                    Debug.LogWarning($"第 {i} 條轉換失敗，請檢查 Ollama 是否有 nomic-embed-text 模型");
+                }
+            }
+
+            // 儲存結果
+            string json = JsonUtility.ToJson(db);
+            string outputPath = Application.dataPath + "/Resources/VectorDatabase.json";
+            File.WriteAllText(outputPath, json);
+            
+            AssetDatabase.Refresh();
+            Debug.Log($"<color=green>向量庫建置成功！總計 {db.entries.Count} 條</color>");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"建置過程出錯: {e.Message}");
+        }
+        finally
+        {
+            EditorUtility.ClearProgressBar();
+            DestroyImmediate(tempGO); // 刪除臨時物件
+        }
     }
 }

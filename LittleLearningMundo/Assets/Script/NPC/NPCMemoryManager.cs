@@ -44,7 +44,7 @@ public class NPCMemoryManager : MonoBehaviour
         if (AccountManager.Instance != null && AccountManager.Instance.CurrentPlayer != null && controller != null && controller.identity != null)
         {
             // 【修改】定位到該 NPC 的記憶區塊並更新
-            string myID = controller.identity.npcName;
+            string myID = controller.npcName;
             var accountHistory = AccountManager.Instance.CurrentPlayer.GetMemoryForNPC(myID);
             
             accountHistory.Clear();
@@ -66,6 +66,18 @@ public class NPCMemoryManager : MonoBehaviour
         _conversationHistory.Add(new OllamaChatMessage { role = "assistant", content = text });
         TrimHistory();
         SyncToAccount();
+    }
+
+    public void SaveUserRequest(string text)
+    {
+        // 這裡的邏輯應該與 SaveAssistantResponse 類似
+        // 只是角色要設為 "user"
+        var currentAccount = AccountManager.Instance.CurrentPlayer;
+        var memory = currentAccount.npcMemories.Find(m => m.npcID == controller.npcName);
+                _conversationHistory.Add(new OllamaChatMessage { role = "user", content = text });
+        TrimHistory();
+        SyncToAccount();
+
     }
 
     public void AddSystemEvent(string eventText)

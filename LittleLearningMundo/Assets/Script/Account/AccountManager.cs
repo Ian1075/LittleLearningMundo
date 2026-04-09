@@ -16,6 +16,7 @@ public class SavedChatMessage
 public class NPCMemory
 {
     public string npcID;
+    public bool hasFinishedGuide; // 新增：紀錄是否已結束導覽
     public List<SavedChatMessage> chatHistory = new List<SavedChatMessage>();
 }
 
