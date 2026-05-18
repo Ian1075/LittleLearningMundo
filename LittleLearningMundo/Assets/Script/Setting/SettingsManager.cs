@@ -56,7 +56,6 @@ public class SettingsManager : MonoBehaviour
         PlayerPrefs.Save(); // 寫入硬碟
 
         ApplyToServices();
-        //Debug.Log($"<color=cyan>[Settings] 設定已儲存並套用！ Model: {model}</color>");
     }
 
     /// <summary>

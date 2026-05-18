@@ -3,7 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 
 /// <summary>
-/// 負責控制設定面板的開關與 UI 互動。
+/// 負責控制設定面板的開關、UI 互動與安全離開遊戲功能。
 /// </summary>
 public class SettingsUIManager : MonoBehaviour
 {
@@ -13,11 +13,12 @@ public class SettingsUIManager : MonoBehaviour
     public GameObject settingsPanel;
     public KeyCode toggleKey = KeyCode.Escape;
 
-    [Header("UI 綁定 (如果這裡是 None 就抓不到字！)")]
+    [Header("UI 綁定 (請務必將對應 UI 物件拖入 Inspector)")]
     public TMP_InputField urlInputField;
     public TMP_InputField modelInputField;
     public Button saveButton;
     public Button closeButton;
+    public Button exitButton; // 【新增】離開遊戲（安全存檔退出）按鈕
 
     private void Start()
     {
@@ -25,8 +26,10 @@ public class SettingsUIManager : MonoBehaviour
 
         if (saveButton != null) saveButton.onClick.AddListener(OnSaveButtonClicked);
         if (closeButton != null) closeButton.onClick.AddListener(ClosePanel);
+        
+        // 【新增】綁定離開按鈕事件
+        if (exitButton != null) exitButton.onClick.AddListener(OnExitButtonClicked);
 
-        // 【新增】綁定輸入框結束編輯 (點擊其他地方離開) 時的事件
         if (urlInputField != null) urlInputField.onEndEdit.AddListener(OnUrlEndEdit);
         if (modelInputField != null) modelInputField.onEndEdit.AddListener(OnModelEndEdit);
 
@@ -73,7 +76,6 @@ public class SettingsUIManager : MonoBehaviour
         if (modelInputField != null) modelInputField.text = modelToDisplay;
     }
 
-    // 【新增】當離開 URL 輸入框時立刻檢查
     private void OnUrlEndEdit(string text)
     {
         if (SettingsManager.Instance == null || urlInputField == null) return;
@@ -84,7 +86,6 @@ public class SettingsUIManager : MonoBehaviour
         }
     }
 
-    // 【新增】當離開 Model 輸入框時立刻檢查
     private void OnModelEndEdit(string text)
     {
         if (SettingsManager.Instance == null || modelInputField == null) return;
@@ -99,7 +100,6 @@ public class SettingsUIManager : MonoBehaviour
     {
         if (SettingsManager.Instance == null) return;
 
-        // 【終極防呆】如果你忘記綁定 UI，直接在 Console 噴出紅色錯誤警告你！
         if (urlInputField == null || modelInputField == null)
         {
             Debug.LogError("<color=red><b>[嚴重錯誤]</b></color> 你的 SettingsUIManager 沒有綁定 InputField！請檢查 Inspector，把輸入框拖進去！");
@@ -109,11 +109,9 @@ public class SettingsUIManager : MonoBehaviour
         string oldUrl = SettingsManager.Instance.CurrentApiUrl;
         string oldModel = SettingsManager.Instance.CurrentModelName;
 
-        // 讀取玩家輸入的文字 (清除隱形字元與空白)
         string url = urlInputField.text.Replace("\u200B", "").Trim();
         string model = modelInputField.text.Replace("\u200B", "").Trim();
 
-        // 防呆機制：如果是空的，自動使用預設值
         if (string.IsNullOrEmpty(url)) url = SettingsManager.Instance.defaultApiUrl;
         if (string.IsNullOrEmpty(model)) model = SettingsManager.Instance.defaultModelName;
 
@@ -122,9 +120,37 @@ public class SettingsUIManager : MonoBehaviour
 
         Debug.Log($"<color=yellow>[設定變更]</color>\nURL: {oldUrl} ➔ {url}\nModel: {oldModel} ➔ {model}");
 
-        // 儲存設定
         SettingsManager.Instance.SaveSettings(url, model);
         
         ClosePanel();
+    }
+
+    /// <summary>
+    /// 【新增】點擊離開按鈕時觸發，先自動存檔再安全退出
+    /// </summary>
+    private void OnExitButtonClicked()
+    {
+        Debug.Log("<color=red>[系統] 偵測到離開請求，正在執行安全存檔...</color>");
+
+        // 1. 自動存檔（防止玩家忘記存檔直接退出，對話紀錄或筆記不見）
+        if (AccountManager.Instance != null && AccountManager.Instance.CurrentPlayer != null)
+        {
+            AccountManager.Instance.SaveProgress();
+            Debug.Log("<color=green>[系統] 玩家進度成功儲存到本機 JSON 檔案中！</color>");
+        }
+
+        // 2. 恢復時間流速（防止退出後影響 Editor 狀態或生命週期）
+        Time.timeScale = 1f;
+
+        // 3. 執行退出平台判定
+        #if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+        #elif UNITY_WEBGL
+        // 在 WebGL 網頁版，由於無法強制關閉瀏覽器視窗，我們讓玩家「退回登入介面」代表離開
+        Debug.LogWarning("[系統] WebGL 網頁版不支援調用 Application.Quit()。改為登出並退回登入畫面。");
+        UnityEngine.SceneManagement.SceneManager.LoadScene("LoginScene");
+        #else
+        Application.Quit(); // PC 執行檔 (.exe) 直接關閉程式
+        #endif
     }
 }
