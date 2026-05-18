@@ -1,19 +1,22 @@
 using UnityEngine;
 using UnityEditor;
+using System.Collections.Generic;
 
 /// <summary>
 /// 為 WaypointNode 提供可視化編輯功能。
-/// 強化了射線偵測與錯誤回饋，解決因缺少 Collider 導致無法生成的問。
+/// 增加了「全場景雙向連線」與「全場景 Y 軸對齊」功能。
 /// </summary>
 [CustomEditor(typeof(WaypointNode))]
 [CanEditMultipleObjects]
 public class WaypointEditor : Editor
 {
     private WaypointNode _node;
+    private static float _targetY = 0f; // 靜態變數以便在切換選取時保留數值
 
     private void OnEnable()
     {
         _node = (WaypointNode)target;
+        if (_node != null) _targetY = _node.transform.position.y;
     }
 
     public override void OnInspectorGUI()
@@ -21,102 +24,140 @@ public class WaypointEditor : Editor
         DrawDefaultInspector();
 
         GUILayout.Space(10);
-        GUILayout.Label("快速編輯工具", EditorStyles.boldLabel);
+        GUILayout.Label("局部編輯工具 (針對選中節點)", EditorStyles.boldLabel);
 
         if (GUILayout.Button("與選中的其他節點建立雙向連線"))
         {
             ConnectSelectedNodes(true);
         }
 
-        if (GUILayout.Button("清除所有鄰近連線"))
+        if (GUILayout.Button("清除選中節點的所有連線"))
         {
             Undo.RecordObject(_node, "Clear Neighbors");
             _node.neighbors.Clear();
             EditorUtility.SetDirty(_node);
         }
 
+        GUILayout.Space(15);
+        GUILayout.Label("全域路徑工具 (針對整個場景)", EditorStyles.boldLabel);
+        
+        // --- 雙向連線工具 ---
+        GUI.color = Color.cyan;
+        if (GUILayout.Button("將場景內「所有」路徑轉為雙向"))
+        {
+            MakeAllNodesBidirectional();
+        }
+        GUI.color = Color.white;
+
         GUILayout.Space(5);
-        EditorGUILayout.HelpBox("操作提示：\n1. 點擊側鍵 (Mouse 3) 生成節點。\n2. 若無反應，請確保道路物件有掛載 Mesh Collider。", MessageType.Info);
+
+        // --- Y 軸對齊工具 ---
+        EditorGUILayout.BeginVertical("box");
+        GUILayout.Label("Y 軸高度統一工具", EditorStyles.miniBoldLabel);
+        _targetY = EditorGUILayout.FloatField("目標 Y 高度", _targetY);
+        
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("抓取當前高度"))
+        {
+            _targetY = _node.transform.position.y;
+        }
+        
+        GUI.color = new Color(1f, 0.8f, 0.4f); // 橘黃色提醒
+        if (GUILayout.Button("統一全場景節點高度"))
+        {
+            AlignAllNodesY(_targetY);
+        }
+        GUI.color = Color.white;
+        EditorGUILayout.EndHorizontal();
+        EditorGUILayout.EndVertical();
+
+        GUILayout.Space(10);
+        EditorGUILayout.HelpBox("操作提示：\n1. 點擊側鍵 (Mouse 3) 生成節點。\n2. 「統一全場景節點高度」會強制修改場景中所有 WaypointNode 的 Y 軸座標。", MessageType.Info);
     }
 
     private void OnSceneGUI()
     {
         Event e = Event.current;
-        int controlID = GUIUtility.GetControlID(FocusType.Passive);
-
-        int targetButton = 3; // 側後退鍵
-
-        // 1. 強制讓側鍵不會觸發 Unity 預設行為
-        if (e.button == targetButton)
+        if (e.type == EventType.MouseDown && e.button == 2)
         {
-            if (e.type == EventType.Layout || e.type == EventType.Repaint)
-            {
-                HandleUtility.AddDefaultControl(controlID);
-            }
-        }
-
-        // 2. 獲取滑鼠位置的射線
-        Ray ray = HandleUtility.GUIPointToWorldRay(e.mousePosition);
-        bool hitSomething = Physics.Raycast(ray, out RaycastHit hit, Mathf.Infinity, ~0, QueryTriggerInteraction.Ignore);
-
-        // 3. 視覺輔助與警告
-        if (hitSomething)
-        {
-            Handles.color = Color.yellow;
-            Handles.DrawWireDisc(hit.point, hit.normal, 0.4f);
-            Handles.Label(hit.point + Vector3.up * 0.5f, "點擊側鍵生成節點");
-        }
-        else
-        {
-            // 如果沒打中東西，在滑鼠位置顯示警告
-            Handles.color = Color.red;
-            Vector3 mouseInWorld = ray.GetPoint(10f); // 假設距離 10 米
-            Handles.Label(mouseInWorld, "<color=red>警告：此處沒有 Collider！\n請幫道路物件添加 Mesh Collider</color>");
-        }
-
-        // 4. 處理生成邏輯
-        if (e.button == targetButton && e.type == EventType.MouseDown)
-        {
-            if (hitSomething)
-            {
-                CreateNewNode(hit.point);
-                e.Use();
-            }
-            else
-            {
-                Debug.LogWarning("[路徑編輯器] 生成失敗：滑鼠位置底下沒有任何帶有 Collider 的物件。請檢查道路是否有 Mesh Collider。");
-            }
-        }
-
-        // 強制重繪以保持預覽圓圈流暢
-        if (e.type == EventType.MouseMove)
-        {
-            SceneView.RepaintAll();
+            GenerateNewNode(e.mousePosition);
+            e.Use();
         }
     }
 
-    private void CreateNewNode(Vector3 spawnPos)
+    /// <summary>
+    /// 將場景中所有 WaypointNode 的高度設為指定數值
+    /// </summary>
+    private void AlignAllNodesY(float y)
     {
-        GameObject newNodeObj = new GameObject("Waypoint_" + System.DateTime.Now.ToString("mm_ss_fff"));
-        newNodeObj.transform.position = spawnPos;
-        
-        if (_node.transform.parent != null)
-            newNodeObj.transform.parent = _node.transform.parent;
-        
-        WaypointNode newNode = newNodeObj.AddComponent<WaypointNode>();
-        
-        Undo.RegisterCreatedObjectUndo(newNodeObj, "Create Waypoint");
-        Undo.RecordObject(_node, "Connect Waypoint");
-        Undo.RecordObject(newNode, "Connect Waypoint");
-        
-        if (!_node.neighbors.Contains(newNode)) _node.neighbors.Add(newNode);
-        if (!newNode.neighbors.Contains(_node)) newNode.neighbors.Add(_node);
+        WaypointNode[] allNodes = GameObject.FindObjectsOfType<WaypointNode>();
+        if (allNodes.Length == 0) return;
 
-        EditorUtility.SetDirty(_node);
-        EditorUtility.SetDirty(newNode);
-        
-        Selection.activeGameObject = newNodeObj;
-        Debug.Log($"<color=green>[路徑編輯器] 成功生成節點並連線！</color>");
+        if (!EditorUtility.DisplayDialog("確認對齊高度", $"是否要將場景內所有 {allNodes.Length} 個節點的高度都設為 {y}？", "確定", "取消"))
+            return;
+
+        foreach (var node in allNodes)
+        {
+            Undo.RecordObject(node.transform, "Align Waypoint Y");
+            Vector3 pos = node.transform.position;
+            pos.y = y;
+            node.transform.position = pos;
+            EditorUtility.SetDirty(node);
+        }
+
+        Debug.Log($"<color=orange>[路徑編輯器] 已將全場景 {allNodes.Length} 個節點對齊至 Y = {y}。</color>");
+    }
+
+    private void MakeAllNodesBidirectional()
+    {
+        WaypointNode[] allNodes = GameObject.FindObjectsOfType<WaypointNode>();
+        int updatedCount = 0;
+
+        foreach (var nodeA in allNodes)
+        {
+            if (nodeA.neighbors == null) continue;
+            List<WaypointNode> currentNeighbors = new List<WaypointNode>(nodeA.neighbors);
+
+            foreach (var nodeB in currentNeighbors)
+            {
+                if (nodeB == null) continue;
+                if (!nodeB.neighbors.Contains(nodeA))
+                {
+                    Undo.RecordObject(nodeB, "Make Bidirectional");
+                    nodeB.neighbors.Add(nodeA);
+                    EditorUtility.SetDirty(nodeB);
+                    updatedCount++;
+                }
+            }
+        }
+        Debug.Log($"<color=cyan>[路徑編輯器] 全場景雙向化完成！補齊了 {updatedCount} 條反向路徑。</color>");
+    }
+
+    private void GenerateNewNode(Vector2 mousePos)
+    {
+        Ray ray = HandleUtility.GUIPointToWorldRay(mousePos);
+        if (Physics.Raycast(ray, out RaycastHit hit))
+        {
+            GameObject newNodeObj = new GameObject("WaypointNode_" + System.DateTime.Now.Ticks % 10000);
+            newNodeObj.transform.position = hit.point + Vector3.up * 0.1f;
+            newNodeObj.transform.SetParent(_node.transform.parent);
+
+            WaypointNode newNode = newNodeObj.AddComponent<WaypointNode>();
+            
+            Undo.RegisterCreatedObjectUndo(newNodeObj, "Create Waypoint");
+            Undo.RecordObject(_node, "Connect New Node");
+
+            if (!_node.neighbors.Contains(newNode))
+                _node.neighbors.Add(newNode);
+
+            newNode.neighbors.Add(_node);
+
+            EditorUtility.SetDirty(_node);
+            EditorUtility.SetDirty(newNode);
+            
+            Selection.activeGameObject = newNodeObj;
+            Debug.Log($"<color=green>[路徑編輯器] 成功生成節點並建立雙向連線！</color>");
+        }
     }
 
     private void ConnectSelectedNodes(bool bidirectional)

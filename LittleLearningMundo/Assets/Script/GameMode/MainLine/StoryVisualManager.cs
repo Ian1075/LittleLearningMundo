@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections;
 
+[ExecuteAlways]
 public class StoryVisualManager : MonoBehaviour
 {
     public static StoryVisualManager Instance { get; private set; }
@@ -15,10 +16,24 @@ public class StoryVisualManager : MonoBehaviour
 
     private bool _isCinematicMode = false;
 
+    public bool livePreview = false; // 在 Inspector 手動勾選開啟預覽
+    public Transform previewNode;
+
     private void Awake()
     {
         if (Instance == null) Instance = this;
         else Destroy(gameObject);
+    }
+
+    private void Update()
+    {
+        // 如果不是在播放模式，且開啟了預覽開關
+        if (!Application.isPlaying && livePreview && mainCamera != null && previewNode != null)
+        {
+            // 強制將相機位置與旋轉同步到 Node 上[cite: 2]
+            mainCamera.transform.position = previewNode.position;
+            mainCamera.transform.rotation = previewNode.rotation;
+        }
     }
 
     /// <summary>
